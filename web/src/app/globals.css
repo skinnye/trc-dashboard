@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html, body {
+    @apply bg-bg text-text antialiased;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    overflow-x: hidden;
+  }
+  * { box-sizing: border-box; }
+  ::selection { background: rgba(99,102,241,0.3); }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-xl p-5 shadow-card;
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:border-accent/40 hover:shadow-glow;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all;
+  }
+  .btn-primary {
+    @apply btn bg-accent hover:bg-accent/90 text-white;
+  }
+  .btn-ghost {
+    @apply btn bg-surface2 hover:bg-border text-text border border-border;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium;
+  }
+  .badge-good { @apply badge bg-good/15 text-good border border-good/30; }
+  .badge-warn { @apply badge bg-warn/15 text-warn border border-warn/30; }
+  .badge-bad  { @apply badge bg-bad/15 text-bad border border-bad/30; }
+  .num { font-variant-numeric: tabular-nums; }
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
+.pulse-dot {
+  animation: pulse-ring 2s infinite;
+}
