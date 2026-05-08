@@ -8,6 +8,9 @@ REM используйте run_all.bat или напрямую run_all.py.
 setlocal
 cd /d "%~dp0"
 
+REM Если на машине нужны явные creds для шары Acad-server — подцепляем.
+if exist "%~dp0..\.creds.bat" call "%~dp0..\.creds.bat"
+
 REM Если используется virtualenv, раскомментируйте:
 REM call venv\Scripts\activate
 

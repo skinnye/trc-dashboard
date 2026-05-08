@@ -10,6 +10,9 @@ REM ломает, только обновляет данные.
 setlocal
 cd /d "%~dp0"
 
+REM Если на машине нужны явные creds для шары Acad-server — подцепляем.
+if exist "%~dp0..\.creds.bat" call "%~dp0..\.creds.bat"
+
 python -X utf8 -u run_all.py %*
 
 exit /b %ERRORLEVEL%
