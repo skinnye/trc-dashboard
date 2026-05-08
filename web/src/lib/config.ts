@@ -22,6 +22,11 @@ export const SQL_CONFIG = {
   options: {
     encrypt: false,
     trustServerCertificate: true,
+    // CompacsM хранит TimeRecord в локальном времени сервера без TZ.
+    // Без useUTC=false драйвер mssql конвертирует JS-Date → UTC, и наша
+    // "локальная полночь" уезжает на 3 часа назад → live-счётчик ловит
+    // вчерашние вечерние уходы и показывает 0/мусор.
+    useUTC: false,
   },
   pool: { max: 10, min: 0, idleTimeoutMillis: 30_000 },
 };

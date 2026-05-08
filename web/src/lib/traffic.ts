@@ -56,10 +56,16 @@ export function synthFloor3Nested(
 
 // ── Live counter ─────────────────────────────────────────────────────────
 // Flask traffic_app.py:235 uses raw `max(0, ins − outs)`, which sinks to 0
-// every evening because the perimeter IR sensors over-count exits by ~5-15 %.
-// Same formula here, but we scale today's outs by the 7-day ins/outs ratio
-// (clamped to [0.65, 0.85]) so the counter reflects actual occupancy instead
-// of pinned-to-zero noise. The badge labels still mirror Python.
+// every evening because the perimeter IR sensors slightly over-count exits.
+// We discount today's outs by the actual 7-day ins/outs ratio: if exits
+// over-count by 5 %, k ≈ 0.95 and we subtract 5 % less than raw outs.
+// Cap at 1.0 — outs sensors can't physically register fewer crossings than
+// reality, so k > 1 would only mean an entry sensor is underperforming and
+// no correction is appropriate.
+//
+// Earlier this had a hardcoded clamp [0.65, 0.85], which over-corrected
+// roughly threefold on real data (true ratio observed ~0.95) and produced
+// inflated occupancy mid-day.
 export interface LiveData {
   inside: number;
   insToday: number;
@@ -113,9 +119,9 @@ export async function getLive(): Promise<LiveData> {
   const outs7 = Number(cal.outs7 ?? 0) || 0;
   const last: Date | null = row.last ?? null;
 
-  let k = outs7 > 0 ? ins7 / outs7 : 0.80;
-  if (!Number.isFinite(k)) k = 0.80;
-  k = Math.min(0.85, Math.max(0.65, k));
+  let k = outs7 > 0 ? ins7 / outs7 : 1.0;
+  if (!Number.isFinite(k)) k = 1.0;
+  k = Math.min(1.0, k);
 
   const fmtDate = today.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
   return {

@@ -116,6 +116,130 @@ CREATE TABLE IF NOT EXISTS payment_log (
   new_value    REAL,
   delta        REAL NOT NULL
 );
+
+-- ── Съезды и заезды арендаторов ───────────────────────────────────────
+-- Историческая таблица движений арендаторов: расторжения договоров (съезды)
+-- и новые договоры (заезды). Источник — годовые Excel-файлы план-факт со
+-- шары Acad-server (папка 01_Бюджет, разбита по годам), лист «4 съезд-заезд»
+-- (в более старых годах формат другой — парсер ищет маркеры в любых листах).
+-- Импорт идемпотентен: UNIQUE по (year, kind, seq_no, room) ловит повторы.
+CREATE TABLE IF NOT EXISTS tenant_movements (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  year            INTEGER NOT NULL,
+  kind            TEXT NOT NULL,            -- 'departure' (съезд) | 'arrival' (заезд)
+  seq_no          INTEGER,                  -- № строки в исходном реестре
+  floor           TEXT,                     -- '1' / '2' / 'УЛ' / ...
+  room            TEXT,                     -- код помещения 'R1-6', 'К2-3', ...
+  area_m2         REAL,
+  rate_per_m2     REAL,
+  legal_name      TEXT,                     -- 'ИП Иванов', 'ООО Ромашка'
+  trade_name      TEXT,                     -- торговое наименование
+  charges_no_vat  REAL,
+  charges_with_vat REAL,
+  event_date      TEXT,                     -- 'YYYY-MM-DD' если распарсилось
+  date_raw        TEXT,                     -- если в Excel пришла строка
+  source_file     TEXT NOT NULL,            -- абсолютный путь к xlsx
+  source_sheet    TEXT NOT NULL,            -- имя листа в xlsx
+  source_row      INTEGER,                  -- номер строки в листе
+  imported_at     TEXT NOT NULL,
+  UNIQUE(year, kind, seq_no, room, source_file)
+);
+CREATE INDEX IF NOT EXISTS idx_tm_year_kind ON tenant_movements(year, kind);
+CREATE INDEX IF NOT EXISTS idx_tm_room      ON tenant_movements(room);
+CREATE INDEX IF NOT EXISTS idx_tm_date      ON tenant_movements(event_date);
+
+-- ── История статуса помещений (Сдан/Не сдан) ──────────────────────────
+-- Помесячный снапшот каждого помещения за все годы. Извлекается Python-
+-- парсером import_status_history.py из помесячных листов годовых файлов
+-- план-факт. Главный кейс: построить timeline занятости по комнатам и
+-- общую динамику свободных площадей по ТРЦ.
+CREATE TABLE IF NOT EXISTS rent_status_history (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  year          INTEGER NOT NULL,           -- календарный год периода
+  month         INTEGER NOT NULL,           -- 1..12
+  floor         TEXT,
+  room          TEXT,
+  area_m2       REAL,
+  status        TEXT NOT NULL,              -- 'rented' | 'not_rented' | 'other'
+  status_raw    TEXT,                       -- сырой текст из ячейки
+  legal_name    TEXT,
+  trade_name    TEXT,
+  rate_per_m2   REAL,
+  source_file   TEXT NOT NULL,
+  source_sheet  TEXT NOT NULL,
+  imported_at   TEXT NOT NULL,
+  UNIQUE(year, month, room, source_file)
+);
+CREATE INDEX IF NOT EXISTS idx_rsh_year_month ON rent_status_history(year, month);
+CREATE INDEX IF NOT EXISTS idx_rsh_room       ON rent_status_history(room);
+CREATE INDEX IF NOT EXISTS idx_rsh_status     ON rent_status_history(status);
+
+-- ── Application settings (key-value) ──────────────────────────────────
+-- Динамические настройки приложения, которые пользователь может менять
+-- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу
+-- 2GIS, расписание парсера, токены интеграций и т.д.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT,
+  description TEXT,
+  updated_at  TEXT NOT NULL
+);
+
+-- ── External 2GIS context ─────────────────────────────────────────────
+-- Снапшоты внешнего окружения: справочник категорий, прогоны парсера,
+-- организации (дедуплицированные) и метрики на момент каждого прогона.
+-- Парсер пишет сюда раз в неделю — UI читает.
+CREATE TABLE IF NOT EXISTS ext_categories (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL UNIQUE,
+  search_url  TEXT NOT NULL,
+  active      INTEGER NOT NULL DEFAULT 1,
+  added_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ext_runs (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at        TEXT NOT NULL,
+  finished_at       TEXT,
+  status            TEXT NOT NULL DEFAULT 'running',  -- running | ok | error
+  error_msg         TEXT,
+  total_orgs        INTEGER,
+  categories_done   INTEGER DEFAULT 0,
+  categories_total  INTEGER DEFAULT 0,
+  source            TEXT                              -- 'excel-import' | 'parser-2gis' | 'manual'
+);
+
+CREATE TABLE IF NOT EXISTS ext_orgs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key      TEXT NOT NULL UNIQUE,    -- 'Категория|Название|Адрес' (нижний регистр)
+  category_id     INTEGER NOT NULL,
+  name            TEXT NOT NULL,
+  address         TEXT,
+  street          TEXT,
+  is_duplicate    INTEGER NOT NULL DEFAULT 0,
+  first_seen_at   TEXT NOT NULL,
+  last_seen_at    TEXT NOT NULL,
+  FOREIGN KEY (category_id) REFERENCES ext_categories(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ext_orgs_category ON ext_orgs(category_id);
+
+CREATE TABLE IF NOT EXISTS ext_snapshots (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id         INTEGER NOT NULL,
+  org_id         INTEGER NOT NULL,
+  rating         REAL,
+  reviews_count  INTEGER,
+  phones         TEXT,           -- JSON array
+  website        TEXT,
+  hours          TEXT,           -- JSON
+  longitude      REAL,
+  latitude       REAL,
+  raw_json       TEXT,           -- сырой ответ парсера для будущих фич
+  FOREIGN KEY (run_id) REFERENCES ext_runs(id),
+  FOREIGN KEY (org_id) REFERENCES ext_orgs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ext_snapshots_run ON ext_snapshots(run_id);
+CREATE INDEX IF NOT EXISTS idx_ext_snapshots_org ON ext_snapshots(org_id);
 `;
 
 export function localDate(): string {
@@ -141,4 +265,34 @@ export function prevDate(date: string): string {
 export function latestSnapshotDate(): string | null {
   const row = db().prepare('SELECT MAX(snapshot_date) AS d FROM rent_daily').get() as { d?: string };
   return row?.d ?? null;
+}
+
+// ── App settings: key-value ────────────────────────────────────────────
+// Хранит динамические параметры (пути к файлам, расписания, токены).
+// UI правит их через POST /api/settings, без перезапуска и без .env.
+
+export function getSetting(key: string): string | null {
+  const row = db()
+    .prepare('SELECT value FROM app_settings WHERE key = ?')
+    .get(key) as { value?: string | null } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string | null, description?: string): void {
+  db()
+    .prepare(`
+      INSERT INTO app_settings (key, value, description, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value       = excluded.value,
+        description = COALESCE(excluded.description, app_settings.description),
+        updated_at  = excluded.updated_at
+    `)
+    .run(key, value, description ?? null, localIsoDateTime());
+}
+
+export function listSettings(): { key: string; value: string | null; description: string | null; updatedAt: string }[] {
+  return db()
+    .prepare('SELECT key, value, description, updated_at AS updatedAt FROM app_settings ORDER BY key')
+    .all() as { key: string; value: string | null; description: string | null; updatedAt: string }[];
 }

@@ -3,12 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Building2, Activity, LayoutGrid } from 'lucide-react';
+import { Building2, Activity, LayoutGrid, Globe, History } from 'lucide-react';
 
 const links = [
-  { href: '/',        label: 'Главная', icon: LayoutGrid },
-  { href: '/rent',    label: 'Аренда',  icon: Building2 },
-  { href: '/traffic', label: 'Трафик',  icon: Activity },
+  { href: '/',          label: 'Главная',         icon: LayoutGrid },
+  { href: '/rent',      label: 'Аренда',          icon: Building2 },
+  { href: '/traffic',   label: 'Трафик',          icon: Activity },
+  { href: '/occupancy', label: 'История',         icon: History },
+  { href: '/external',  label: 'Внешний контур',  icon: Globe },
 ];
 
 export function Nav({ right }: { right?: React.ReactNode }) {

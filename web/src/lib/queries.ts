@@ -27,7 +27,7 @@ export function getLatestMeta(): SnapshotMeta | null {
   if (!date) return null;
   const row = db().prepare(`
     SELECT MAX(captured_at) AS captured_at FROM rent_daily WHERE snapshot_date = ?
-  `).get(date) as { captured_at?: string };
+  `).get(date) as unknown as { captured_at?: string };
   return { date, capturedAt: row?.captured_at ?? date };
 }
 
@@ -46,7 +46,7 @@ export function getMonthlyTotals(date: string): MonthlyTotal[] {
            fact_s_to AS factSTo, fact_bez_to AS factBezTo
     FROM monthly_totals_ext
     WHERE snapshot_date = ? ORDER BY month_num
-  `).all(date) as MonthlyTotal[];
+  `).all(date) as unknown as MonthlyTotal[];
 }
 
 // ── LEGACY: monthly totals from Python's `monthly_totals` (always fresh) ──
@@ -58,7 +58,7 @@ export function getMonthlyTotalsLegacy(): MonthlyTotal[] {
     FROM monthly_totals
     WHERE captured_at = (SELECT MAX(captured_at) FROM monthly_totals)
     ORDER BY month_num
-  `).all() as MonthlyTotal[];
+  `).all() as unknown as MonthlyTotal[];
 }
 
 export function getLegacyCaptureMeta(): { capturedAt: string } | null {
@@ -91,7 +91,7 @@ export function getRoomsForMonth(date: string, month: number): RoomRow[] {
            fact_vat AS factVat, fact_oplat AS factOplat
     FROM rent_daily
     WHERE snapshot_date = ? AND month_num = ?
-  `).all(date, month) as RoomRow[];
+  `).all(date, month) as unknown as RoomRow[];
 }
 
 // ── Lost revenue: rooms «не сдан» cross-referenced vs dec_reference ──
@@ -119,7 +119,7 @@ export function getLostRevenueForMonth(date: string, month: number): LostRevenue
       AND dr.status = 'сдан'
       AND dr.plan_vat > 0
     ORDER BY potentialRevenue DESC
-  `).all(date, month) as LostRevenueRow[];
+  `).all(date, month) as unknown as LostRevenueRow[];
 }
 
 export function getLostRevenueByMonth(date: string): Record<number, number> {
@@ -414,7 +414,7 @@ export function getPaymentLog(sinceDate?: string): PaymentLogRow[] {
     FROM payment_log ${where}
     ORDER BY id DESC
     LIMIT 500
-  `).all(...args) as PaymentLogRow[];
+  `).all(...args) as unknown as PaymentLogRow[];
 }
 
 // ── TENANT directory: list with план/факт for a given month + comments ──
@@ -531,5 +531,5 @@ export function getChanges(sinceDate?: string): ChangeRow[] {
     FROM rent_changes ${where}
     ORDER BY snapshot_date DESC, id DESC
     LIMIT 500
-  `).all(...args) as ChangeRow[];
+  `).all(...args) as unknown as ChangeRow[];
 }

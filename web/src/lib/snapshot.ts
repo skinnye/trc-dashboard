@@ -180,10 +180,10 @@ function computeChanges(snapshotDate: string): number {
   };
   const prevRows = conn.prepare(`
     SELECT month_num, floor, room, legal, status, rate FROM rent_daily WHERE snapshot_date = ?
-  `).all(prevDay) as Row[];
+  `).all(prevDay) as unknown as Row[];
   const currRows = conn.prepare(`
     SELECT month_num, floor, room, legal, status, rate FROM rent_daily WHERE snapshot_date = ?
-  `).all(snapshotDate) as Row[];
+  `).all(snapshotDate) as unknown as Row[];
 
   const key = (r: Row) => `${r.month_num}|${(r.room ?? '').trim().toLowerCase()}`;
   const P = new Map<string, Row>();

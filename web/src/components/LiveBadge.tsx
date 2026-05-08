@@ -27,17 +27,17 @@ export function LiveBadge() {
   }, []);
 
   return (
-    <div className="flex items-center gap-2 sm:gap-3 bg-gradient-to-br from-good/15 to-good/5 border border-good/30 rounded-xl px-2.5 sm:px-3.5 py-1.5 sm:py-2">
-      <span className="relative w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-good pulse-dot shrink-0" />
+    <div className="flex items-center gap-2 bg-gradient-to-br from-good/15 to-good/5 border border-good/30 rounded-lg px-2 py-1">
+      <span className="relative w-2 h-2 rounded-full bg-good pulse-dot shrink-0" />
       <div className="leading-tight">
-        <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-good font-semibold">Сейчас в ТРЦ</div>
-        <div className="text-base sm:text-lg font-bold num">
+        <div className="text-[9px] uppercase tracking-wider text-good font-semibold">В ТРЦ</div>
+        <div className="text-sm font-bold num">
           {err ? '—' : data ? fmtInt(data.inside) : '…'}
         </div>
-        <div className="text-[10px] text-muted num hidden sm:block">
+        <div className="text-[9px] text-muted num hidden md:block">
           {data && !err
-            ? `↑${fmtInt(data.insToday)} · ↓${fmtInt(data.outsToday)}${data.asOf ? ' · на ' + data.asOf : ''}`
-            : 'загрузка…'}
+            ? `↑${fmtInt(data.insToday)} ↓${fmtInt(data.outsToday)}${data.asOf ? ' · ' + data.asOf : ''}`
+            : '…'}
         </div>
       </div>
     </div>
