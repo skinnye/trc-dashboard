@@ -282,8 +282,7 @@ export default function ExternalPage() {
           <Heatmap
             points={heatPoints}
             height={520}
-            radius={heatMode === 'count' ? 22 : 28}
-            blur={heatMode === 'count' ? 18 : 22}
+            radius={heatMode === 'count' ? 18 : 24}
           />
           <div className="mt-3 text-xs text-muted flex items-center gap-3 flex-wrap">
             <MapIcon size={12} />
