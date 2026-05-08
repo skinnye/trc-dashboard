@@ -295,8 +295,8 @@ function MovementsTab() {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { position: 'top' as const },
-          tooltip: { callbacks: { label: (c: { dataset: { label?: string }; parsed: { y: number } }) =>
-            `${c.dataset.label}: ${Math.abs(c.parsed.y)}` } },
+          tooltip: { callbacks: { label: (c: { dataset: { label?: string }; parsed: { y: number | null } }) =>
+            `${c.dataset.label}: ${Math.abs(c.parsed.y ?? 0)}` } },
         },
         scales: { x: { stacked: true },
                   y: { stacked: true,
