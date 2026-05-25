@@ -6,6 +6,15 @@ export const dynamic = 'force-dynamic';
 
 function parseDate(v: string | null, def: Date): Date {
   if (!v) return def;
+  // 'YYYY-MM-DD' через new Date() парсится как UTC-полночь. На сервере с
+  // не-UTC TZ (например Екатеринбург UTC+5) это даёт сдвиг на +5 часов —
+  // MSSQL отрезает первые часы первого дня диапазона, и день показывает 0.
+  // Парсим явно как локальную полночь — совпадает с остальными датами,
+  // которые тоже считаются от локального dni.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (m) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
   const d = new Date(v);
   return Number.isFinite(d.getTime()) ? d : def;
 }
