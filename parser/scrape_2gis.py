@@ -160,13 +160,14 @@ def scrape_url(parser_cmd: list[str], url: str, raw_dump: Path | None = None,
             '-i', url,
             '-o', str(out_path),
             '-f', 'json',
-            # ВАЖНО: headless НЕ работает с 2GIS Web — у безголового Chrome
-            # viewport нулевого размера, и 2GIS API отвечает 'Bound is
-            # incorrect'. Поэтому окно открываем настоящее, развёрнутое.
-            # Для запуска под Windows Task Scheduler это всё равно работает,
-            # просто во время прогона на экране будет окно браузера.
-            '--chrome.headless', 'no',
-            '--chrome.start-maximized', 'yes',
+            # headless: yes теперь работает благодаря патчу в
+            # vendor-parser-2gis/parser_2gis/chrome/browser.py — он добавляет
+            # --window-size=1920,1080 в headless mode. Без этого 2GIS API
+            # возвращал «Bound is incorrect» и приходило 0 карточек.
+            # Преимущество headless: задача в Task Scheduler работает даже
+            # когда admin не залогинен (нет физического экрана) — а это
+            # как раз и нужно для ночного прогона.
+            '--chrome.headless', 'yes',
             '--chrome.disable-images', 'yes',
             '--chrome.silent-browser', 'yes',
             '--parser.delay_between_clicks', '300',
