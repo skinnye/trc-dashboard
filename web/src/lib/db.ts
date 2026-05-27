@@ -210,6 +210,31 @@ CREATE INDEX IF NOT EXISTS idx_turnover_year     ON turnover_yearly(year);
 CREATE INDEX IF NOT EXISTS idx_turnover_category ON turnover_yearly(category);
 CREATE INDEX IF NOT EXISTS idx_turnover_store    ON turnover_yearly(store_name);
 
+-- ── Помесячный товарооборот ────────────────────────────────────────────
+-- 12 месяцев × N арендаторов на каждый год. Заполняется из колонок
+-- 23..94 листа «НОВАЯ» (6 показателей на месяц: to_sum, to_per_m2,
+-- yoy_pct, mom_pct, purchases, ap).
+-- UNIQUE по (year, month, store_name) обеспечивает идемпотентность.
+CREATE TABLE IF NOT EXISTS turnover_monthly (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  year            INTEGER NOT NULL,
+  month           INTEGER NOT NULL,                  -- 1..12
+  store_name      TEXT NOT NULL,
+  category        TEXT,
+  area_m2         REAL,
+  to_sum          REAL,                              -- ТО за месяц
+  to_per_m2       REAL,                              -- ТО с м² за месяц
+  yoy_pct         REAL,                              -- % к этому месяцу пред. года
+  mom_pct         REAL,                              -- % к прошлому месяцу
+  purchases       REAL,                              -- кол-во покупок
+  ap_for_month    REAL,                              -- АП за месяц
+  source_file     TEXT NOT NULL,
+  imported_at     TEXT NOT NULL,
+  UNIQUE(year, month, store_name)
+);
+CREATE INDEX IF NOT EXISTS idx_turnover_monthly_year_month ON turnover_monthly(year, month);
+CREATE INDEX IF NOT EXISTS idx_turnover_monthly_store      ON turnover_monthly(store_name);
+
 -- ── Application settings (key-value) ──────────────────────────────────
 -- Динамические настройки приложения, которые пользователь может менять
 -- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу

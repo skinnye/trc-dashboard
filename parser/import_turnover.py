@@ -62,6 +62,26 @@ COLS = {
     'to_yoy_pct':       22,   # Сравнение ср. ТО vs пред. год
 }
 
+# Помесячные колонки идут блоками по 6 штук, начиная с колонки 23.
+# Структура каждого блока (для месяца M, базовая колонка = MONTHLY_BASE + (M-1)*6):
+#   +0: ТО за месяц
+#   +1: % к этому месяцу пред. года (yoy)
+#   +2: ТО с м² за месяц
+#   +3: % к прошлому месяцу (mom)
+#   +4: Кол-во покупок за месяц
+#   +5: АП за месяц
+# Итого 12 × 6 = 72 колонки (23..94).
+MONTHLY_BASE = 23
+MONTHLY_FIELDS = ('to_sum', 'yoy_pct', 'to_per_m2', 'mom_pct', 'purchases', 'ap_for_month')
+
+
+def monthly_col(month: int, field_name: str) -> int:
+    """Возвращает 1-based индекс колонки для указанного месяца и поля."""
+    if not 1 <= month <= 12:
+        raise ValueError(f'month must be 1..12, got {month}')
+    offset = MONTHLY_FIELDS.index(field_name)
+    return MONTHLY_BASE + (month - 1) * 6 + offset
+
 
 SCHEMA_SQL = '''
 CREATE TABLE IF NOT EXISTS turnover_yearly (
@@ -95,6 +115,26 @@ CREATE TABLE IF NOT EXISTS turnover_yearly (
 CREATE INDEX IF NOT EXISTS idx_turnover_year     ON turnover_yearly(year);
 CREATE INDEX IF NOT EXISTS idx_turnover_category ON turnover_yearly(category);
 CREATE INDEX IF NOT EXISTS idx_turnover_store    ON turnover_yearly(store_name);
+
+CREATE TABLE IF NOT EXISTS turnover_monthly (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  year            INTEGER NOT NULL,
+  month           INTEGER NOT NULL,
+  store_name      TEXT NOT NULL,
+  category        TEXT,
+  area_m2         REAL,
+  to_sum          REAL,
+  to_per_m2       REAL,
+  yoy_pct         REAL,
+  mom_pct         REAL,
+  purchases       REAL,
+  ap_for_month    REAL,
+  source_file     TEXT NOT NULL,
+  imported_at     TEXT NOT NULL,
+  UNIQUE(year, month, store_name)
+);
+CREATE INDEX IF NOT EXISTS idx_turnover_monthly_year_month ON turnover_monthly(year, month);
+CREATE INDEX IF NOT EXISTS idx_turnover_monthly_store      ON turnover_monthly(store_name);
 '''
 
 
@@ -159,29 +199,39 @@ def open_db() -> sqlite3.Connection:
     return conn
 
 
-def upsert(conn: sqlite3.Connection, fields: dict, source_file: str,
-           dry_run: bool) -> str:
+def upsert_yearly(conn: sqlite3.Connection, fields: dict, source_file: str,
+                  dry_run: bool) -> str:
+    """UPSERT в turnover_yearly. Используем ON CONFLICT по UNIQUE(year, store_name)
+    — это атомарно и без TOCTOU-окна (см. code review)."""
     if dry_run:
         return 'inserted'
     now = now_iso()
-    existing = conn.execute(
-        'SELECT id FROM turnover_yearly WHERE year = ? AND store_name = ?',
-        (fields['year'], fields['store_name']),
-    ).fetchone()
-    if existing:
-        sets = ', '.join(f'{k} = ?' for k in fields if k not in ('year', 'store_name'))
-        vals = [fields[k] for k in fields if k not in ('year', 'store_name')]
-        vals.extend([source_file, now, existing[0]])
-        conn.execute(
-            f'UPDATE turnover_yearly SET {sets}, source_file = ?, imported_at = ? WHERE id = ?',
-            vals,
-        )
-        return 'updated'
-    keys = list(fields.keys()) + ['source_file', 'imported_at']
-    vals = [fields[k] for k in fields.keys()] + [source_file, now]
-    placeholders = ', '.join(['?'] * len(keys))
+    cols = list(fields.keys()) + ['source_file', 'imported_at']
+    vals = [fields[k] for k in fields] + [source_file, now]
+    placeholders = ', '.join(['?'] * len(cols))
+    update_cols = [c for c in cols if c not in ('year', 'store_name')]
+    update_set = ', '.join(f'{c} = excluded.{c}' for c in update_cols)
+    cur = conn.execute(
+        f'INSERT INTO turnover_yearly ({", ".join(cols)}) VALUES ({placeholders}) '
+        f'ON CONFLICT(year, store_name) DO UPDATE SET {update_set}',
+        vals,
+    )
+    return 'inserted' if cur.rowcount == 1 else 'updated'
+
+
+def upsert_monthly(conn: sqlite3.Connection, fields: dict, source_file: str,
+                   dry_run: bool) -> str:
+    if dry_run:
+        return 'inserted'
+    now = now_iso()
+    cols = list(fields.keys()) + ['source_file', 'imported_at']
+    vals = [fields[k] for k in fields] + [source_file, now]
+    placeholders = ', '.join(['?'] * len(cols))
+    update_cols = [c for c in cols if c not in ('year', 'month', 'store_name')]
+    update_set = ', '.join(f'{c} = excluded.{c}' for c in update_cols)
     conn.execute(
-        f'INSERT INTO turnover_yearly ({", ".join(keys)}) VALUES ({placeholders})',
+        f'INSERT INTO turnover_monthly ({", ".join(cols)}) VALUES ({placeholders}) '
+        f'ON CONFLICT(year, month, store_name) DO UPDATE SET {update_set}',
         vals,
     )
     return 'inserted'
@@ -217,13 +267,11 @@ def main() -> int:
         return 2
 
     conn = open_db() if not args.dry_run else None
-    totals = {'inserted': 0, 'updated': 0, 'skipped': 0}
+    totals = {'yearly_in': 0, 'yearly_up': 0, 'monthly_in': 0, 'skipped': 0}
 
     try:
         # Идём со второй строки — первая это шапка
-        row_idx = 0
         for raw_row in ws.iter_rows(min_row=2, values_only=True):
-            row_idx += 1
             row = list(raw_row)
             # Безопасный доступ — лист может быть уже шире, чем нам нужно
             def cell(col: int) -> Any:
@@ -239,13 +287,17 @@ def main() -> int:
             if not store_name:
                 totals['skipped'] += 1
                 continue
+            # Нормализуем NBSP и схлопываем повторные пробелы (см. code review).
+            store_name = re.sub(r'\s+', ' ', store_name.replace('\xa0', ' ')).strip()
+            category = cell_to_str(cell(COLS['category']))
+            area_m2 = cell_to_float(cell(COLS['area_m2']))
 
-            fields = {
+            yearly_fields = {
                 'year': year,
                 'arendator':        cell_to_str(cell(COLS['arendator'])),
                 'store_name':       store_name,
-                'category':         cell_to_str(cell(COLS['category'])),
-                'area_m2':          cell_to_float(cell(COLS['area_m2'])),
+                'category':         category,
+                'area_m2':          area_m2,
                 'rate_fixed':       cell_to_float(cell(COLS['rate_fixed'])),
                 'rate_fixed_to':    cell_to_float(cell(COLS['rate_fixed_to'])),
                 'ap_fixed':         cell_to_float(cell(COLS['ap_fixed'])),
@@ -265,16 +317,38 @@ def main() -> int:
                 'to_yoy_pct':       cell_to_float(cell(COLS['to_yoy_pct'])),
             }
 
-            res = upsert(conn, fields, str(path), args.dry_run) if conn else 'inserted'
-            totals[res] = totals.get(res, 0) + 1
+            if conn:
+                res = upsert_yearly(conn, yearly_fields, str(path), args.dry_run)
+                totals['yearly_' + ('in' if res == 'inserted' else 'up')] += 1
+            else:
+                totals['yearly_in'] += 1
+
+            # ── помесячные данные ──
+            # Для каждого месяца проверяем, что есть хоть один из показателей.
+            # Если все шесть NULL — месяц не импортируем (магазина в этом
+            # месяце ещё/уже не было).
+            for m in range(1, 13):
+                month_fields = {}
+                for f in MONTHLY_FIELDS:
+                    month_fields[f] = cell_to_float(cell(monthly_col(m, f)))
+                if all(v is None for v in month_fields.values()):
+                    continue
+                rec = {
+                    'year': year, 'month': m, 'store_name': store_name,
+                    'category': category, 'area_m2': area_m2,
+                    **month_fields,
+                }
+                if conn:
+                    upsert_monthly(conn, rec, str(path), args.dry_run)
+                totals['monthly_in'] += 1
     finally:
         wb.close()
         if conn:
             conn.commit()
             conn.close()
 
-    logging.info('Готово. Вставлено %d, обновлено %d, пропущено %d.',
-                 totals['inserted'], totals['updated'], totals['skipped'])
+    logging.info('Готово. Годовых: вставлено %d, обновлено %d. Помесячных: %d. Пропущено: %d.',
+                 totals['yearly_in'], totals['yearly_up'], totals['monthly_in'], totals['skipped'])
     return 0
 
 
