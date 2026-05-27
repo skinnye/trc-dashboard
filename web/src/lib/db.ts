@@ -174,6 +174,42 @@ CREATE INDEX IF NOT EXISTS idx_rsh_year_month ON rent_status_history(year, month
 CREATE INDEX IF NOT EXISTS idx_rsh_room       ON rent_status_history(room);
 CREATE INDEX IF NOT EXISTS idx_rsh_status     ON rent_status_history(status);
 
+-- ── Товарооборот арендаторов (годовой) ────────────────────────────────
+-- Снапшоты годовых показателей по каждому арендатору из листа «НОВАЯ»
+-- файла 02_ТО АП.xlsx. Источник — Python-парсер import_turnover.py.
+-- UNIQUE по (year, store_name) обеспечивает идемпотентность импорта.
+CREATE TABLE IF NOT EXISTS turnover_yearly (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  year               INTEGER NOT NULL,
+  arendator          TEXT,                  -- юр. лицо
+  store_name         TEXT NOT NULL,         -- название магазина
+  category           TEXT,
+  area_m2            REAL,
+  rate_fixed         REAL,                  -- ставка фикс
+  rate_fixed_to      REAL,                  -- ставка фикс + ТО
+  ap_fixed           REAL,                  -- АП фикс
+  ap_fixed_indexed   REAL,                  -- АП фикс после индексации
+  ap_extra           REAL,                  -- Доп. АП
+  to_percent         REAL,                  -- % с ТО
+  ap_with_to         REAL,                  -- АП с учётом ТО
+  ap_share_in_to     REAL,                  -- Доля АП в ТО
+  to_sum_year        REAL,                  -- ТО сумма за год
+  to_sum_period      REAL,                  -- ТО сумма за период (янв-ноя)
+  to_avg_monthly     REAL,                  -- ТО средний (месячный)
+  to_per_m2          REAL,                  -- ТО с м² (ключевой показатель)
+  avg_traffic        REAL,
+  avg_purchases      REAL,
+  avg_check          REAL,
+  ap_change_note     TEXT,                  -- Изменение условий АП
+  to_yoy_pct         REAL,                  -- Сравнение ср. ТО vs пред. год
+  source_file        TEXT NOT NULL,
+  imported_at        TEXT NOT NULL,
+  UNIQUE(year, store_name)
+);
+CREATE INDEX IF NOT EXISTS idx_turnover_year     ON turnover_yearly(year);
+CREATE INDEX IF NOT EXISTS idx_turnover_category ON turnover_yearly(category);
+CREATE INDEX IF NOT EXISTS idx_turnover_store    ON turnover_yearly(store_name);
+
 -- ── Application settings (key-value) ──────────────────────────────────
 -- Динамические настройки приложения, которые пользователь может менять
 -- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу

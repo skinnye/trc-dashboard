@@ -24,6 +24,7 @@ HERE = Path(__file__).parent.resolve()
 SCRIPTS = [
     'import_status_history.py',  # помесячная заполняемость
     'import_movements.py',        # съезды/заезды (лист «4 съезд-заезд»)
+    'import_turnover.py',         # товарооборот (лист «НОВАЯ» в 02_ТО АП.xlsx)
 ]
 
 
