@@ -143,9 +143,25 @@ def find_parser_binary() -> list[str] | None:
     return None
 
 
+# Признаки временных сбоев в stderr parser-2gis: при них имеет смысл повторить
+# категорию. Видели вживую 2026-05-07: «DOM.resolveNode … No node with given id
+# found» (гонка Chromium/антибот, raw_5/raw_6) — на повторе та же категория
+# отработала (raw_7). «Bound is incorrect» оставлен на случай регресса
+# нормализации URL.
+RETRIABLE_MARKERS = (
+    'DOM.resolveNode',
+    'No node with given id found',
+    'Bound is incorrect',
+    'CallMethodException',
+)
+
+
 def scrape_url(parser_cmd: list[str], url: str, raw_dump: Path | None = None,
-               timeout: int = 1800, max_records: int | None = None) -> list[dict]:
-    """Дёргает parser-2gis на одиночный URL поиска и возвращает список карточек.
+               timeout: int = 1800, max_records: int | None = None) -> tuple[list[dict], bool]:
+    """Дёргает parser-2gis на одиночный URL поиска.
+
+    Возвращает (карточки, retriable): retriable=True — получили 0 карточек
+    из-за временного сбоя (краш Chromium, антибот) и есть смысл повторить.
 
     CLI parser-2gis принимает URL'ы прямо как аргументы (`-i URL1 URL2 ...`),
     выходной формат `-f json` пишет массив объектов CatalogItem (см.
@@ -189,11 +205,14 @@ def scrape_url(parser_cmd: list[str], url: str, raw_dump: Path | None = None,
                 encoding='utf-8',
             )
 
+        combined_err = f'{res.stdout or ""}\n{res.stderr or ""}'
+        is_retriable = any(m in combined_err for m in RETRIABLE_MARKERS)
+
         if res.returncode != 0:
             logging.error('parser-2gis returncode=%d', res.returncode)
             if res.stdout: logging.error('stdout: %s', res.stdout[-1500:])
             if res.stderr: logging.error('stderr: %s', res.stderr[-1500:])
-            return []
+            return [], True  # ненулевой код — всегда пробуем ещё раз
 
         # parser-2gis по умолчанию пишет с BOM (encoding=utf-8-sig).
         try:
@@ -201,31 +220,53 @@ def scrape_url(parser_cmd: list[str], url: str, raw_dump: Path | None = None,
         except Exception as e:
             logging.error('Не удалось прочитать JSON: %s', e)
             if res.stdout: logging.info('parser-2gis stdout: %s', res.stdout[-1000:])
-            return []
+            return [], True
 
         if not data:
             # Пустой массив — нужно понять, почему. Проблема может быть в
             # URL (404), в headless-режиме (страница не загрузилась), или
             # в антибот-защите 2GIS. Логируем выхлоп парсера, чтобы было
             # за что зацепиться.
-            tail = (res.stdout or '').strip().splitlines()[-15:]
+            tail = (res.stderr or res.stdout or '').strip().splitlines()[-15:]
             if tail:
-                logging.warning('parser-2gis вернул 0 записей. Последние строки:')
+                logging.warning('parser-2gis вернул 0 записей%s. Последние строки:',
+                                ' (retriable-сбой)' if is_retriable else '')
                 for line in tail:
                     logging.warning('  %s', line)
 
         if not isinstance(data, list):
-            return []
+            return [], is_retriable
 
         if raw_dump:
             raw_dump.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2),
                 encoding='utf-8',
             )
-        return data
+        return data, (is_retriable and not data)
     finally:
         try: out_path.unlink()
         except Exception: pass
+
+
+def scrape_url_with_retry(parser_cmd: list[str], url: str,
+                          raw_dump: Path | None = None,
+                          max_records: int | None = None,
+                          attempts: int = 3, backoff: int = 20) -> list[dict]:
+    """Обёртка над scrape_url: до `attempts` попыток при временных сбоях
+    (краш DOM.resolveNode, антибот). Пауза между попытками растёт линейно:
+    backoff, 2*backoff, … Категории с честным «ничего не найдено» не ретраим."""
+    for attempt in range(1, attempts + 1):
+        cards, retriable = scrape_url(parser_cmd, url, raw_dump=raw_dump,
+                                      max_records=max_records)
+        if cards or not retriable:
+            return cards
+        if attempt < attempts:
+            pause = backoff * attempt
+            logging.warning('  попытка %d/%d не удалась (временный сбой), повтор через %d с',
+                            attempt, attempts, pause)
+            time.sleep(pause)
+    logging.error('  все %d попытки исчерпаны, категория останется пустой', attempts)
+    return []
 
 
 # ── Маппинг карточки 2GIS → поля БД ───────────────────────────────────────
@@ -492,6 +533,7 @@ def main() -> int:
     logging.info('Создан прогон ext_runs.id=%d', run_id)
 
     total_orgs = 0
+    empty_categories: list[str] = []
     error_msg: str | None = None
     try:
         cats = get_categories(conn, args.limit, args.category)
@@ -506,9 +548,12 @@ def main() -> int:
             raw_dump = (LOG_DIR / f'raw_{run_id}_{cat_id}.json') if args.keep_raw else None
 
             try:
-                cards = scrape_url(parser_cmd, normalize_search_url(url), raw_dump=raw_dump,
-                                   max_records=args.max_records)
+                cards = scrape_url_with_retry(parser_cmd, normalize_search_url(url),
+                                              raw_dump=raw_dump,
+                                              max_records=args.max_records)
                 logging.info('  карточек получено: %d', len(cards))
+                if not cards:
+                    empty_categories.append(f'{cat_id}:{cat_name}')
 
                 run_iso = now_iso()
                 for card in cards:
@@ -521,6 +566,7 @@ def main() -> int:
                         total_orgs += 1
             except Exception as e:
                 logging.exception('  ошибка в категории «%s»: %s', cat_name, e)
+                empty_categories.append(f'{cat_id}:{cat_name} (exception)')
 
             conn.execute('UPDATE ext_runs SET categories_done = ? WHERE id = ?',
                          (i, run_id))
@@ -528,8 +574,24 @@ def main() -> int:
             if i < len(cats) and args.delay > 0:
                 time.sleep(args.delay)
 
-        finalize_run(conn, run_id, 'ok', total_orgs)
-        logging.info('Готово. Всего снапшотов: %d', total_orgs)
+        # Защита от «пустого успеха»: если прогон не собрал НИ ОДНОЙ карточки
+        # (например, headless Chrome не отрендерил под заблокированной сессией),
+        # помечаем его как 'empty', а не 'ok'. UI берёт последний прогон
+        # WHERE status='ok' — без этой защиты пустой прогон перетёр бы
+        # последний хороший и страница /external показала бы ноль организаций.
+        final_status = 'ok' if total_orgs > 0 else 'empty'
+        finalize_run(conn, run_id, final_status, total_orgs)
+        logging.info('Готово. Статус: %s. Всего снапшотов: %d', final_status, total_orgs)
+        if total_orgs == 0:
+            logging.error('ПРОГОН ПУСТОЙ — 0 карточек на все категории. '
+                          'Вероятно headless Chrome не отрендерил (RDP отключён / '
+                          'сессия заблокирована). Прогон помечен status=empty и НЕ '
+                          'перетрёт последний хороший прогон в UI.')
+        if empty_categories:
+            logging.warning('Категории без карточек (%d) — проверить руками или отключить active=0:',
+                            len(empty_categories))
+            for c in empty_categories:
+                logging.warning('  %s', c)
         return 0
     except Exception as e:
         logging.exception('Фатальная ошибка прогона')

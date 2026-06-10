@@ -62,6 +62,12 @@ parser/logs/
 parser/raw/
 parser/*.log
 
+# ── Яндекс-отзывы: ЖИВЫЕ cookies и кэш ───────────────────────────────
+# _ya_cookies.txt содержит сессионные cookies marketolog@academ-trc.ru —
+# НИКОГДА не коммитить. _ya_cache/ — скачанные HTML и JSON отзывов.
+parser/_ya_cookies.txt
+parser/_ya_cache/
+
 # Python байткод
 __pycache__/
 *.pyc
