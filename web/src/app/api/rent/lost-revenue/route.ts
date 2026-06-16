@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureSnapshot } from '@/lib/snapshot';
-import { getLostRevenueForMonth, getLostRevenueByMonth } from '@/lib/queries';
+import {
+  getLostRevenueForMonth, getLostRevenueByMonth, getLostRevenueByRoomYear,
+} from '@/lib/queries';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +17,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ month: m, total, items });
   }
   const byMonth = getLostRevenueByMonth(date);
+  const byRoom = getLostRevenueByRoomYear(date);
   const grand = Object.values(byMonth).reduce((s, v) => s + v, 0);
-  return NextResponse.json({ totalYear: grand, byMonth });
+  return NextResponse.json({ totalYear: grand, byMonth, byRoom });
 }

@@ -17,6 +17,14 @@ type MonthSummary = {
   factSTo: number | null; factBezTo: number | null;
 };
 
+type LostRoomRow = {
+  floor: string | null; room: string | null;
+  lastLegal: string | null; lastTrade: string | null;
+  area: number | null; monthlyPotential: number;
+  monthsVacant: number; totalPotential: number;
+};
+type LostYearData = { totalYear: number; byMonth: Record<number, number>; byRoom: LostRoomRow[] };
+
 type TabId = 'dashboard' | 'tenants' | 'discipline' | 'deviations' | 'log' | 'history' | 'lost';
 
 const TABS: { id: TabId; label: string; Icon: any }[] = [
@@ -35,7 +43,7 @@ export default function RentPage() {
   const [tab, setTab] = useState<TabId>('dashboard');
   const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
   const [refreshing, setRefreshing] = useState(false);
-  const [lostYear, setLostYear] = useState<{ totalYear: number; byMonth: Record<number, number> } | null>(null);
+  const [lostYear, setLostYear] = useState<LostYearData | null>(null);
 
   async function loadSummary() {
     const r = await fetch('/api/rent/summary');
@@ -110,7 +118,7 @@ export default function RentPage() {
 
         {tab === 'dashboard' && (
           <DashboardTab summary={summary} month={month} setMonth={setMonth}
-                        lostYear={lostYear?.totalYear ?? null} />
+                        lostYear={lostYear} />
         )}
         {tab === 'tenants' && (
           <TenantsTab summary={summary} month={month} setMonth={setMonth} />
@@ -137,7 +145,7 @@ const MONTH_SHORT = ['Янв','Фев','Мар','Апр','Май','Июн','Ию
 function DashboardTab({
   summary, month, setMonth, lostYear,
 }: {
-  summary: any; month: number; setMonth: (m: number) => void; lostYear: number | null;
+  summary: any; month: number; setMonth: (m: number) => void; lostYear: LostYearData | null;
 }) {
   const cur: MonthSummary | undefined = summary?.months.find((m: MonthSummary) => m.month === month);
 
@@ -229,11 +237,8 @@ function DashboardTab({
               left={{ label: 'с ТО',  color: '#60a5fa', plan: cumulative.planSTo,  fact: cumulative.factSTo  }}
               right={{ label: 'без ТО', color: '#34d399', plan: cumulative.planBez, fact: cumulative.factBez }}
             />
-            {lostYear != null && lostYear > 0 && (
-              <div className="mt-5 pt-4 border-t border-border/60 text-sm">
-                <span className="text-muted">Недополученная выгода за год:</span>{' '}
-                <span className="font-semibold text-bad num">{fmtRub(lostYear)}</span>
-              </div>
+            {lostYear && lostYear.totalYear > 0 && (
+              <LostYearBreakdown data={lostYear} />
             )}
           </div>
         </Card>
@@ -749,6 +754,84 @@ function DevTable({ rows, good }: { rows: any[]; good?: boolean }) {
       </table>
       {rows.length > 20 && (
         <div className="text-center text-xs text-muted py-3">Показано 20 из {rows.length}</div>
+      )}
+    </div>
+  );
+}
+
+// ───────────── Расшифровка годовой недополучки (суммарно по помещениям) ────
+function LostYearBreakdown({ data }: { data: LostYearData }) {
+  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const rooms = data.byRoom ?? [];
+  const shown = showAll ? rooms : rooms.slice(0, 8);
+
+  return (
+    <div className="mt-5 pt-4 border-t border-border/60">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-2 text-sm w-full text-left group"
+      >
+        <ChevronDown size={15} className={cn('text-muted transition-transform', open && 'rotate-180')} />
+        <span className="text-muted">Недополученная выгода за год:</span>
+        <span className="font-semibold text-bad num">{fmtRub(data.totalYear)}</span>
+        <span className="text-xs text-muted ml-auto group-hover:text-text transition-colors">
+          {rooms.length} помещ. · {open ? 'свернуть' : 'расшифровка'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-4">
+          <div className="text-xs text-muted mb-3">
+            Помещения, которые сдавались в декабре 2025, но сейчас «Не сдан».
+            Суммарный потенциал аренды (с НДС) за всё время простоя — по убыванию.
+          </div>
+          <div className="overflow-x-auto -mx-5">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-muted uppercase tracking-wider border-b border-border">
+                  <th className="text-left  px-5 py-2 font-medium">Помещение</th>
+                  <th className="text-left  px-5 py-2 font-medium">Последний арендатор (дек. 25)</th>
+                  <th className="text-right px-5 py-2 font-medium">Пл., м²</th>
+                  <th className="text-right px-5 py-2 font-medium">Мес. простоя</th>
+                  <th className="text-right px-5 py-2 font-medium">₽/мес</th>
+                  <th className="text-right px-5 py-2 font-medium">Σ за год</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((r, i) => (
+                  <tr key={i} className="border-b border-border/50 hover:bg-surface2/50 transition-colors">
+                    <td className="px-5 py-2.5 whitespace-nowrap">
+                      <span className="font-medium">{r.room || '—'}</span>
+                      {r.floor && <span className="text-xs text-muted ml-2">эт. {r.floor}</span>}
+                    </td>
+                    <td className="px-5 py-2.5">
+                      <div className="font-medium truncate max-w-[280px]">{r.lastTrade || r.lastLegal || '—'}</div>
+                      {r.lastLegal && r.lastTrade && (
+                        <div className="text-xs text-muted truncate max-w-[280px]">{r.lastLegal}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right num text-muted">{r.area ? r.area.toFixed(1) : '—'}</td>
+                    <td className="px-5 py-2.5 text-right num text-muted">{r.monthsVacant}</td>
+                    <td className="px-5 py-2.5 text-right num text-muted">{fmtShort(r.monthlyPotential)}</td>
+                    <td className="px-5 py-2.5 text-right num font-semibold text-bad">{fmtRub(r.totalPotential)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border">
+                  <td className="px-5 py-2.5 text-xs text-muted uppercase tracking-wider" colSpan={5}>Итого</td>
+                  <td className="px-5 py-2.5 text-right num font-bold text-bad">{fmtRub(data.totalYear)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          {rooms.length > 8 && (
+            <button onClick={() => setShowAll(v => !v)} className="mt-3 text-xs text-accent hover:underline">
+              {showAll ? 'Свернуть' : `Показать все (${rooms.length})`}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

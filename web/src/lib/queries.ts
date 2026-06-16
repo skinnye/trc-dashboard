@@ -139,6 +139,43 @@ export function getLostRevenueByMonth(date: string): Record<number, number> {
   return out;
 }
 
+// Суммарная расшифровка годовой недополучки — свёрнуто по помещениям
+// (БЕЗ разбивки по месяцам). Для каждого помещения: сколько месяцев оно
+// простаивало («Не сдан») и сколько суммарно потенциальной аренды (с НДС)
+// это стоило за год. Σ totalPotential по всем строкам = годовой итог
+// (тот же, что getLostRevenueByMonth) — суммы «бьются» с заголовком.
+export interface LostRevenueRoomRow {
+  floor: string | null;
+  room: string | null;
+  lastLegal: string | null;
+  lastTrade: string | null;
+  area: number | null;
+  monthlyPotential: number;   // план с НДС за месяц (dec_reference)
+  monthsVacant: number;       // в скольких месяцах помещение «Не сдан»
+  totalPotential: number;     // суммарная недополучка за год
+}
+export function getLostRevenueByRoomYear(date: string): LostRevenueRoomRow[] {
+  return db().prepare(`
+    SELECT rd.floor                       AS floor,
+           rd.room                        AS room,
+           dr.legal                       AS lastLegal,
+           dr.trade                       AS lastTrade,
+           COALESCE(dr.area, MAX(rd.area)) AS area,
+           dr.plan_vat                    AS monthlyPotential,
+           COUNT(DISTINCT rd.month_num)   AS monthsVacant,
+           SUM(dr.plan_vat)               AS totalPotential
+    FROM rent_daily rd
+    JOIN dec_reference dr
+      ON LOWER(TRIM(dr.room)) = LOWER(TRIM(rd.room))
+    WHERE rd.snapshot_date = ?
+      AND rd.status = 'не сдан'
+      AND dr.status = 'сдан'
+      AND dr.plan_vat > 0
+    GROUP BY rd.floor, rd.room, dr.legal, dr.trade, dr.plan_vat, dr.area
+    ORDER BY totalPotential DESC
+  `).all(date) as unknown as LostRevenueRoomRow[];
+}
+
 // ── Payment history by legal entity (across all months) ───────────────
 export interface PaymentHistoryRow {
   legal: string;
