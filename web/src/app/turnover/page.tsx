@@ -729,6 +729,55 @@ function StoreDrillModal({
     return arr.length ? arr[arr.length - 1] : null;
   }, [focus]);
 
+  // YoY/MoM считаем САМИ из ряда to_sum (хранимые yoy_pct/mom_pct из Excel
+  // битые: для Прада3D Май-2026 хранимый MoM −94%, реальный +6%). Берём
+  // только месяцы с to_sum > 0; будущие/пустые месяцы → без сравнения.
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'period', dir: 'desc' });
+  const rows = useMemo(() => {
+    const byKey = new Map<number, number>();
+    for (const p of data ?? []) if (p.toSum != null && p.toSum > 0) byKey.set(p.year * 12 + p.month, p.toSum);
+    const aug = (data ?? []).map(p => {
+      const cur = p.toSum != null && p.toSum > 0 ? p.toSum : null;
+      const py = byKey.get((p.year - 1) * 12 + p.month) ?? null;
+      const pmKey = p.month === 1 ? (p.year - 1) * 12 + 12 : p.year * 12 + (p.month - 1);
+      const pm = byKey.get(pmKey) ?? null;
+      const f = focusMap.get(`${p.year}-${p.month}`);
+      return {
+        year: p.year, month: p.month, period: p.year * 12 + p.month,
+        toSum: p.toSum, toPerM2: p.toPerM2, purchases: p.purchases, ap: p.ap,
+        yoy: cur != null && py ? cur / py - 1 : null,
+        mom: cur != null && pm ? cur / pm - 1 : null,
+        avgCheck: f?.avgCheck ?? null,
+        receipts: f?.receipts ?? null,
+      };
+    });
+    aug.sort((a, b) => {
+      const av = (a as Record<string, number | null>)[sort.key];
+      const bv = (b as Record<string, number | null>)[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;       // null всегда вниз
+      if (bv == null) return -1;
+      return sort.dir === 'asc' ? av - bv : bv - av;
+    });
+    return aug;
+  }, [data, focusMap, sort]);
+  function toggleSort(key: string) {
+    setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
+  }
+  const cols: { key: string; label: string; align: 'left' | 'right' }[] = [
+    { key: 'period', label: 'Период', align: 'left' },
+    { key: 'toSum', label: 'ТО', align: 'right' },
+    { key: 'toPerM2', label: 'ТО/м²', align: 'right' },
+    { key: 'yoy', label: 'YoY %', align: 'right' },
+    { key: 'mom', label: 'MoM %', align: 'right' },
+    { key: 'purchases', label: 'Покупок', align: 'right' },
+    ...(hasFocus
+      ? [{ key: 'avgCheck', label: 'Ср. чек', align: 'right' as const },
+         { key: 'receipts', label: 'Чеков', align: 'right' as const }]
+      : []),
+    { key: 'ap', label: 'АП', align: 'right' },
+  ];
+
   const chart = useMemo(() => {
     if (!data || data.length < 2) return null;
     const labels = data.map(p => `${MONTH_NAMES_SHORT[p.month - 1]} ${String(p.year).slice(2)}`);
@@ -796,58 +845,45 @@ function StoreDrillModal({
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-surface z-10">
                     <tr className="text-xs text-muted uppercase tracking-wider border-b border-border">
-                      <th className="text-left  px-5 py-2 font-medium">Период</th>
-                      <th className="text-right px-5 py-2 font-medium">ТО</th>
-                      <th className="text-right px-5 py-2 font-medium">ТО/м²</th>
-                      <th className="text-right px-5 py-2 font-medium">YoY %</th>
-                      <th className="text-right px-5 py-2 font-medium">MoM %</th>
-                      <th className="text-right px-5 py-2 font-medium">Покупок</th>
-                      {hasFocus && <>
-                        <th className="text-right px-5 py-2 font-medium text-accent" title="Focus: средний чек">Ср. чек</th>
-                        <th className="text-right px-5 py-2 font-medium text-accent" title="Focus: число чеков">Чеков</th>
-                      </>}
-                      <th className="text-right px-5 py-2 font-medium">АП</th>
+                      {cols.map(c => (
+                        <th key={c.key}
+                          onClick={() => toggleSort(c.key)}
+                          className={cn('px-5 py-2 font-medium cursor-pointer select-none hover:text-text whitespace-nowrap',
+                            c.align === 'left' ? 'text-left' : 'text-right',
+                            (c.key === 'avgCheck' || c.key === 'receipts') && 'text-accent',
+                            sort.key === c.key && 'text-text')}>
+                          {c.label}
+                          <span className="ml-1 text-[9px]">
+                            {sort.key === c.key ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {[...data].reverse().map((p, i) => (
+                    {rows.map((r, i) => (
                       <tr key={i} className="border-b border-border/50 hover:bg-surface2/50">
-                        <td className="px-5 py-2 num">{MONTH_NAMES_SHORT[p.month - 1]} {p.year}</td>
-                        <td className="px-5 py-2 text-right num font-semibold">
-                          {p.toSum != null ? fmtShort(p.toSum) + ' ₽' : '—'}
-                        </td>
-                        <td className="px-5 py-2 text-right num text-muted">
-                          {p.toPerM2 != null ? fmtShort(p.toPerM2) : '—'}
-                        </td>
-                        <td className={cn('px-5 py-2 text-right num',
-                          p.yoyPct == null ? 'text-muted'
-                          : p.yoyPct > 1 ? 'text-good'
-                          : p.yoyPct < 1 ? 'text-bad' : 'text-muted')}>
-                          {p.yoyPct != null && p.yoyPct > 0 ? fmtPct((p.yoyPct - 1) * 100, 1) : '—'}
-                        </td>
-                        <td className={cn('px-5 py-2 text-right num',
-                          p.momPct == null ? 'text-muted'
-                          : p.momPct > 1 ? 'text-good'
-                          : p.momPct < 1 ? 'text-bad' : 'text-muted')}>
-                          {p.momPct != null && p.momPct > 0 ? fmtPct((p.momPct - 1) * 100, 1) : '—'}
-                        </td>
-                        <td className="px-5 py-2 text-right num text-muted">
-                          {p.purchases != null ? fmtInt(p.purchases) : '—'}
-                        </td>
-                        {hasFocus && (() => {
-                          const f = focusMap.get(`${p.year}-${p.month}`);
-                          return <>
-                            <td className="px-5 py-2 text-right num">
-                              {f?.avgCheck != null ? fmtInt(f.avgCheck) + ' ₽' : '—'}
-                            </td>
-                            <td className="px-5 py-2 text-right num">
-                              {f?.receipts != null ? fmtInt(f.receipts) : '—'}
-                            </td>
-                          </>;
-                        })()}
-                        <td className="px-5 py-2 text-right num text-muted">
-                          {p.ap != null ? fmtShort(p.ap) : '—'}
-                        </td>
+                        {cols.map(c => {
+                          if (c.key === 'period')
+                            return <td key={c.key} className="px-5 py-2 num whitespace-nowrap">{MONTH_NAMES_SHORT[r.month - 1]} {r.year}</td>;
+                          if (c.key === 'toSum')
+                            return <td key={c.key} className="px-5 py-2 text-right num font-semibold">{r.toSum != null ? fmtShort(r.toSum) + ' ₽' : '—'}</td>;
+                          if (c.key === 'toPerM2')
+                            return <td key={c.key} className="px-5 py-2 text-right num text-muted">{r.toPerM2 != null ? fmtShort(r.toPerM2) : '—'}</td>;
+                          if (c.key === 'yoy' || c.key === 'mom') {
+                            const v = c.key === 'yoy' ? r.yoy : r.mom;
+                            return <td key={c.key} className={cn('px-5 py-2 text-right num',
+                              v == null ? 'text-muted' : v > 0 ? 'text-good' : v < 0 ? 'text-bad' : 'text-muted')}>
+                              {v != null ? (v > 0 ? '+' : '') + fmtPct(v * 100, 1) : '—'}</td>;
+                          }
+                          if (c.key === 'purchases')
+                            return <td key={c.key} className="px-5 py-2 text-right num text-muted">{r.purchases != null ? fmtInt(r.purchases) : '—'}</td>;
+                          if (c.key === 'avgCheck')
+                            return <td key={c.key} className="px-5 py-2 text-right num">{r.avgCheck != null ? fmtInt(r.avgCheck) + ' ₽' : '—'}</td>;
+                          if (c.key === 'receipts')
+                            return <td key={c.key} className="px-5 py-2 text-right num">{r.receipts != null ? fmtInt(r.receipts) : '—'}</td>;
+                          return <td key={c.key} className="px-5 py-2 text-right num text-muted">{r.ap != null ? fmtShort(r.ap) : '—'}</td>;
+                        })}
                       </tr>
                     ))}
                   </tbody>
