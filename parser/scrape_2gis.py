@@ -73,15 +73,39 @@ def dedupe_key(category: str, name: str, address: str) -> str:
     return re.sub(r'\s+', ' ', s)
 
 
-def normalize_search_url(url: str) -> str:
-    """URL'ы из Excel имеют формат '.../search/X/filters/bound?m=lng,lat/zoom'.
-    parser-2gis такой `m=...` не понимает — 2GIS Catalog API ругается:
-    'Bound is incorrect. Set viewpoint1 to left top corner and viewpoint2
-    to right bottom corner.' Поэтому стрипим suffix /filters/... — поиск
-    становится по всему городу. У нас есть координаты в снапшоте, и UI
-    может фильтровать по расстоянию от ТРЦ Академический."""
-    if '/filters/' in url:
-        url = url.split('/filters/')[0]
+def normalize_search_url(url: str, scope: str = 'district') -> str:
+    """Готовит URL поиска под выбранный охват (scope).
+
+    URL'ы из Excel: '.../search/X/filters/bound?m=lng,lat/zoom' — параметр
+    m=центр/зум задаёт область карты (район Академический вокруг ТРЦ).
+
+    Раньше мы стрипили границы, потому что в headless с viewport 0×0 2GIS
+    отвечал «Bound is incorrect». Это починено патчем --window-size, и
+    границы теперь работают — поиск идёт именно по видимой области карты.
+
+    scope:
+      • 'district'      — оставить границы как есть (район ТРЦ, исходный смысл).
+      • 'city'          — срезать границы → поиск по всему Екатеринбургу.
+      • 'mall:lng,lat,zoom' — подменить центр карты на координаты другого ТРЦ
+                          (тот же набор категорий, но вокруг другого центра).
+    """
+    if scope == 'city':
+        if '/filters/' in url:
+            url = url.split('/filters/')[0]
+        return url.rstrip('/')
+
+    if scope.startswith('mall:'):
+        coords = scope[len('mall:'):].strip()  # 'lng,lat,zoom'
+        if '/filters/bound?m=' in url:
+            url = re.sub(r'(/filters/bound\?m=)[^/]+/\d+', rf'\g<1>{coords}', url)
+        elif '/filters/' in url:
+            base = url.split('/filters/')[0]
+            url = f'{base}/filters/bound?m={coords}'
+        else:
+            url = f'{url.rstrip("/")}/filters/bound?m={coords}'
+        return url
+
+    # 'district' (по умолчанию) — границы оставляем нетронутыми.
     return url.rstrip('/')
 
 
@@ -488,11 +512,11 @@ def insert_snapshot(conn, run_id: int, org_id: int, metrics: dict) -> None:
     )
 
 
-def begin_run(conn) -> int:
+def begin_run(conn, source: str = '2gis-district') -> int:
     cur = conn.execute(
         'INSERT INTO ext_runs (started_at, status, source, categories_total, categories_done) '
-        "VALUES (?, 'running', 'parser-2gis', 0, 0)",
-        (now_iso(),),
+        "VALUES (?, 'running', ?, 0, 0)",
+        (now_iso(), source),
     )
     return cur.lastrowid
 
@@ -517,7 +541,22 @@ def main() -> int:
                     help='Сохранять JSON-выгрузку каждой категории в logs/raw_*.json')
     ap.add_argument('--max-records', type=int, default=None,
                     help='Лимит записей с одной категории (для теста). По умолчанию — без лимита.')
+    ap.add_argument('--scope', default='district',
+                    help="Охват поиска: 'district' (район ТРЦ, границы из ссылок — "
+                         "по умолчанию), 'city' (весь Екатеринбург), "
+                         "'mall:lng,lat,zoom' (вокруг другого ТРЦ).")
+    ap.add_argument('--label', default=None,
+                    help="Имя охвата для тега прогона (например название другого ТРЦ). "
+                         "Для scope=mall попадёт в source как '2gis-mall:<label>'.")
     args = ap.parse_args()
+
+    # Тег прогона по охвату — чтобы UI различал район / город / другие ТРЦ.
+    if args.scope == 'city':
+        run_source = '2gis-city'
+    elif args.scope.startswith('mall:'):
+        run_source = f'2gis-mall:{args.label or "other"}'
+    else:
+        run_source = '2gis-district'
 
     setup_logging()
     logging.info('Старт парсера. БД: %s', DB_PATH)
@@ -529,8 +568,9 @@ def main() -> int:
     logging.info('parser-2gis: %s', ' '.join(parser_cmd))
 
     conn = open_db(DB_PATH)
-    run_id = begin_run(conn)
-    logging.info('Создан прогон ext_runs.id=%d', run_id)
+    run_id = begin_run(conn, run_source)
+    logging.info('Создан прогон ext_runs.id=%d (охват: %s, source=%s)',
+                 run_id, args.scope, run_source)
 
     total_orgs = 0
     empty_categories: list[str] = []
@@ -548,7 +588,7 @@ def main() -> int:
             raw_dump = (LOG_DIR / f'raw_{run_id}_{cat_id}.json') if args.keep_raw else None
 
             try:
-                cards = scrape_url_with_retry(parser_cmd, normalize_search_url(url),
+                cards = scrape_url_with_retry(parser_cmd, normalize_search_url(url, args.scope),
                                               raw_dump=raw_dump,
                                               max_records=args.max_records)
                 logging.info('  карточек получено: %d', len(cards))
