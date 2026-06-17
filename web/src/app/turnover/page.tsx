@@ -6,7 +6,7 @@ import { LiveBadge } from '@/components/LiveBadge';
 import { Card, CardHeader, Stat } from '@/components/Card';
 import { ChartWrap } from '@/components/Chart';
 import { fmtInt, fmtRub, fmtShort, fmtPct, cn } from '@/lib/utils';
-import { Calendar, Trophy, Ruler, Search, TrendingUp, TrendingDown, CalendarDays, X, Store, Layers, CalendarRange } from 'lucide-react';
+import { Calendar, Trophy, Ruler, Search, TrendingUp, TrendingDown, CalendarDays, X, Store, Layers, CalendarRange, RefreshCw } from 'lucide-react';
 
 const MONTH_NAMES_SHORT = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
 
@@ -87,6 +87,8 @@ export default function TurnoverPage() {
   const [drillStore, setDrillStore] = useState<string | null>(null);
   const [drillData, setDrillData]   = useState<StoreMonthlyTimelinePoint[] | null>(null);
   const [drillFocus, setDrillFocus] = useState<StoreFocusPoint[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/turnover/summary')
@@ -127,6 +129,32 @@ export default function TurnoverPage() {
       .catch(() => {});
     return () => ctrl.abort();
   }, [drillStore]);
+
+  async function refresh() {
+    setRefreshing(true);
+    setRefreshMsg(null);
+    try {
+      const r = await fetch('/api/turnover/refresh', { method: 'POST' });
+      const j = await r.json().catch(() => ({ ok: false }));
+      if (!j.ok) { setRefreshMsg('Ошибка: ' + String(j.error ?? '').slice(0, 160)); return; }
+      // Перезагружаем сводку и данные текущего года из обновлённой БД.
+      const s = await fetch('/api/turnover/summary').then(x => x.json());
+      setYearly(s.years);
+      if (year != null) {
+        setData(null); setMonthlyData(null);
+        const [d, m] = await Promise.all([
+          fetch(`/api/turnover/year/${year}`).then(x => x.json()),
+          fetch(`/api/turnover/year/${year}/monthly`).then(x => x.json()),
+        ]);
+        setData(d); setMonthlyData(m);
+      }
+      setRefreshMsg('Обновлено');
+    } catch {
+      setRefreshMsg('Ошибка обновления');
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const cur = useMemo(() => yearly.find(y => y.year === year) ?? null, [yearly, year]);
 
@@ -180,6 +208,17 @@ export default function TurnoverPage() {
                 {y.year}
               </button>
             ))}
+            <button onClick={refresh} disabled={refreshing}
+              className="ml-1 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+                         bg-surface2 border border-border text-text hover:border-accent/30 disabled:opacity-60">
+              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Обновление…' : 'Обновить'}
+            </button>
+            {refreshMsg && (
+              <span className={cn('text-xs', refreshMsg.startsWith('Ошибка') ? 'text-bad' : 'text-good')}>
+                {refreshMsg}
+              </span>
+            )}
           </div>
         </div>
 
