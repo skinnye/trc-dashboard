@@ -70,6 +70,7 @@ type HeatRow = {
   label: string; sublabel: string | null;
   m: (number | null)[]; total: number;
 };
+type HeatSortKey = number | 'label' | 'total';
 type StoreMonthlyTimelinePoint = {
   year: number; month: number;
   toSum: number | null; toPerM2: number | null;
@@ -451,6 +452,13 @@ function MonthlyTab({
   const [mode, setMode]     = useState<HeatMode>('store');
   const [metric, setMetric] = useState<HeatMetric>('to_sum');
   const [heatRows, setHeatRows] = useState<HeatRow[] | null>(null);
+  // Сортировка карты: 'label' (строка), 'total' (∑ за год) или индекс месяца 0..11.
+  const [heatSort, setHeatSort] = useState<{ key: HeatSortKey; dir: 'asc' | 'desc' }>({ key: 'total', dir: 'desc' });
+  function toggleHeatSort(key: HeatSortKey) {
+    setHeatSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'label' ? 'asc' : 'desc' });
+  }
 
   const matrix = monthlyData?.matrix;
 
@@ -533,7 +541,7 @@ function MonthlyTab({
     },
   };
 
-  // Фильтрация и срез строк тепловой карты. topN — только для магазинов.
+  // Фильтрация → сортировка по выбранному заголовку → срез topN (для магазинов).
   const rows = heatRows ?? [];
   const searchable = mode !== 'year';
   const filteredRows = rows.filter(s => {
@@ -541,7 +549,20 @@ function MonthlyTab({
     const q = filter.toLowerCase();
     return s.label.toLowerCase().includes(q) || (s.sublabel ?? '').toLowerCase().includes(q);
   });
-  const shownRows = mode === 'store' ? filteredRows.slice(0, topN) : filteredRows;
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    if (heatSort.key === 'label') {
+      return heatSort.dir === 'asc'
+        ? a.label.localeCompare(b.label, 'ru')
+        : b.label.localeCompare(a.label, 'ru');
+    }
+    const av = heatSort.key === 'total' ? a.total : a.m[heatSort.key];
+    const bv = heatSort.key === 'total' ? b.total : b.m[heatSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;       // пустые ячейки всегда вниз
+    if (bv == null) return -1;
+    return heatSort.dir === 'asc' ? av - bv : bv - av;
+  });
+  const shownRows = mode === 'store' ? sortedRows.slice(0, topN) : sortedRows;
 
   const metricUnit = metric === 'to_per_m2' ? 'ТО/м²' : '₽';
   const totalColLabel = metric === 'to_per_m2' ? 'средн.' : '∑';
@@ -657,6 +678,8 @@ function MonthlyTab({
             totalColLabel={totalColLabel}
             clickable={mode !== 'category'}
             onRowClick={onRowClick}
+            sort={heatSort}
+            onSort={toggleHeatSort}
           />
         )}
         <div className="mt-3 text-xs text-muted flex items-center gap-3 flex-wrap">
@@ -682,24 +705,40 @@ function MonthlyTab({
 
 // ── Тепловая карта: одна таблица для всех трёх режимов ─────────────────
 function HeatTable({
-  rows, metricUnit, totalColLabel, clickable, onRowClick,
+  rows, metricUnit, totalColLabel, clickable, onRowClick, sort, onSort,
 }: {
   rows: HeatRow[];
   metricUnit: string;
   totalColLabel: string;
   clickable: boolean;
   onRowClick: (label: string) => void;
+  sort: { key: HeatSortKey; dir: 'asc' | 'desc' };
+  onSort: (key: HeatSortKey) => void;
 }) {
+  const arrow = (key: HeatSortKey) =>
+    sort.key === key ? (sort.dir === 'asc' ? '▲' : '▼') : '';
   return (
     <div className="overflow-x-auto -mx-5">
       <table className="w-full text-xs">
         <thead className="bg-surface">
           <tr className="text-[10px] uppercase tracking-wider text-muted border-b border-border">
-            <th className="text-left px-3 py-2 font-medium sticky left-0 bg-surface">Строка</th>
-            {MONTH_NAMES_SHORT.map(n => (
-              <th key={n} className="text-center px-1 py-2 font-medium w-12">{n}</th>
+            <th onClick={() => onSort('label')}
+                className={cn('text-left px-3 py-2 font-medium sticky left-0 bg-surface cursor-pointer select-none hover:text-text',
+                  sort.key === 'label' && 'text-text')}>
+              Строка <span className="text-[8px]">{arrow('label') || '↕'}</span>
+            </th>
+            {MONTH_NAMES_SHORT.map((n, i) => (
+              <th key={n} onClick={() => onSort(i)}
+                  className={cn('text-center px-1 py-2 font-medium w-12 cursor-pointer select-none hover:text-text',
+                    sort.key === i && 'text-accent')}>
+                {n}<span className="text-[8px]">{arrow(i)}</span>
+              </th>
             ))}
-            <th className="text-right px-3 py-2 font-medium">{totalColLabel} за год</th>
+            <th onClick={() => onSort('total')}
+                className={cn('text-right px-3 py-2 font-medium cursor-pointer select-none hover:text-text whitespace-nowrap',
+                  sort.key === 'total' && 'text-text')}>
+              {totalColLabel} за год <span className="text-[8px]">{arrow('total') || '↕'}</span>
+            </th>
           </tr>
         </thead>
         <tbody>
