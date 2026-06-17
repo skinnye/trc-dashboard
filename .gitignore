@@ -78,3 +78,6 @@ __pycache__/
 # В репо сам исходник не тащим — на другой машине склонировать вручную.
 parser/vendor-parser-2gis/
 /FOCUS_RECONCILIATION.md
+
+# Планы этажей (SVG из Corel) — крупные ассеты, на каждую машину отдельно
+floorplans/*.svg

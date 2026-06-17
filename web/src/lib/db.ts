@@ -256,6 +256,21 @@ CREATE TABLE IF NOT EXISTS focus_monthly (
 CREATE INDEX IF NOT EXISTS idx_focus_store      ON focus_monthly(store_name);
 CREATE INDEX IF NOT EXISTS idx_focus_year_month ON focus_monthly(year, month);
 
+-- ── Карта метрик по этажам ────────────────────────────────────────────
+-- Зоны арендаторов на планах этажей (подложка — SVG из CorelDRAW). Геометрия
+-- размечается один раз в редакторе /map: points — список вершин полигона в
+-- координатах плана (viewBox 0 0 29700 21000). store_name связывает зону с
+-- товарооборотом/Focus. Дальше зоны красятся любой метрикой.
+CREATE TABLE IF NOT EXISTS map_zones (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  floor       INTEGER NOT NULL,
+  store_name  TEXT NOT NULL,
+  points      TEXT NOT NULL,           -- JSON: [[x,y],...] в координатах плана
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_map_zones_floor ON map_zones(floor);
+
 -- ── Application settings (key-value) ──────────────────────────────────
 -- Динамические настройки приложения, которые пользователь может менять
 -- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу
