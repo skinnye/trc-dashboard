@@ -36,6 +36,15 @@ type Tenant = {
   curMatched: number | null;
   prevMatched: number | null;
   matchedMonths: number;
+  focusAvgCheck: number | null;
+  focusReceipts: number | null;
+  focusSalesPerM2: number | null;
+};
+
+type StoreFocusPoint = {
+  year: number; month: number;
+  avgCheck: number | null; receipts: number | null;
+  salesPerM2: number | null; returns: number | null;
 };
 
 // YoY считаем сами: ТО за совпадающие месяцы этого года ÷ те же месяцы
@@ -77,6 +86,7 @@ export default function TurnoverPage() {
   const [monthlyData, setMonthlyData] = useState<{ totals: MonthlyTotal[]; matrix: StoreMonthlyRow[] } | null>(null);
   const [drillStore, setDrillStore] = useState<string | null>(null);
   const [drillData, setDrillData]   = useState<StoreMonthlyTimelinePoint[] | null>(null);
+  const [drillFocus, setDrillFocus] = useState<StoreFocusPoint[] | null>(null);
 
   useEffect(() => {
     fetch('/api/turnover/summary')
@@ -107,12 +117,13 @@ export default function TurnoverPage() {
   }, [year]);
 
   useEffect(() => {
-    if (!drillStore) { setDrillData(null); return; }
+    if (!drillStore) { setDrillData(null); setDrillFocus(null); return; }
     const ctrl = new AbortController();
     setDrillData(null);
+    setDrillFocus(null);
     fetch(`/api/turnover/store/${encodeURIComponent(drillStore)}/monthly`, { signal: ctrl.signal })
       .then(r => r.json())
-      .then(d => setDrillData(d.monthly))
+      .then(d => { setDrillData(d.monthly); setDrillFocus(d.focus ?? []); })
       .catch(() => {});
     return () => ctrl.abort();
   }, [drillStore]);
@@ -253,6 +264,8 @@ export default function TurnoverPage() {
                     </th>
                     <th className="text-right px-5 py-2 font-medium">ТО/мес</th>
                     <th className="text-right px-5 py-2 font-medium">vs пред. год</th>
+                    <th className="text-right px-5 py-2 font-medium" title="Средний чек по кассе, Focus">Ср. чек</th>
+                    <th className="text-right px-5 py-2 font-medium" title="Число чеков за период, Focus">Чеков</th>
                     <th className="text-right px-5 py-2 font-medium">АП с ТО</th>
                   </tr>
                 </thead>
@@ -291,6 +304,13 @@ export default function TurnoverPage() {
                               {(yoy > 0 ? '+' : '') + fmtPct(yoy * 100, 1)}
                             </span>
                           ) : <span className="text-xs">новый</span>}
+                        </td>
+                        <td className="px-5 py-2 text-right num text-muted">
+                          {t.focusAvgCheck != null ? fmtInt(t.focusAvgCheck) + ' ₽' : '—'}
+                        </td>
+                        <td className="px-5 py-2 text-right num text-muted"
+                            title={t.focusReceipts != null ? `${fmtInt(t.focusReceipts)} чеков за период` : ''}>
+                          {t.focusReceipts != null ? fmtShort(t.focusReceipts) : '—'}
                         </td>
                         <td className="px-5 py-2 text-right num text-muted">
                           {t.apWithTo != null ? fmtShort(t.apWithTo) : '—'}
@@ -362,6 +382,7 @@ export default function TurnoverPage() {
           <StoreDrillModal
             store={drillStore}
             data={drillData}
+            focus={drillFocus}
             onClose={() => setDrillStore(null)}
           />
         )}
@@ -688,12 +709,26 @@ function HeatTable({
 
 // ── Drill-down: полная история магазина по всем месяцам всех годов ─────
 function StoreDrillModal({
-  store, data, onClose,
+  store, data, focus, onClose,
 }: {
   store: string;
   data: StoreMonthlyTimelinePoint[] | null;
+  focus: StoreFocusPoint[] | null;
   onClose: () => void;
 }) {
+  // Метрики Focus по (год-месяц) для подмешивания в таблицу.
+  const focusMap = useMemo(() => {
+    const m = new Map<string, StoreFocusPoint>();
+    for (const f of focus ?? []) m.set(`${f.year}-${f.month}`, f);
+    return m;
+  }, [focus]);
+  const hasFocus = (focus ?? []).length > 0;
+  // Последний месяц с чеками — для KPI.
+  const lastFocus = useMemo(() => {
+    const arr = (focus ?? []).filter(f => f.receipts != null || f.avgCheck != null);
+    return arr.length ? arr[arr.length - 1] : null;
+  }, [focus]);
+
   const chart = useMemo(() => {
     if (!data || data.length < 2) return null;
     const labels = data.map(p => `${MONTH_NAMES_SHORT[p.month - 1]} ${String(p.year).slice(2)}`);
@@ -731,7 +766,15 @@ function StoreDrillModal({
         <div className="p-5 border-b border-border flex items-start justify-between">
           <div>
             <h2 className="text-xl font-bold">{store}</h2>
-            <p className="text-xs text-muted mt-1">Помесячная история по всем годам</p>
+            <p className="text-xs text-muted mt-1">
+              Помесячная история по всем годам
+              {lastFocus && (
+                <span className="text-accent">
+                  {'  ·  Focus: ср. чек '}{lastFocus.avgCheck != null ? fmtInt(lastFocus.avgCheck) + ' ₽' : '—'}
+                  {', чеков/мес '}{lastFocus.receipts != null ? fmtInt(lastFocus.receipts) : '—'}
+                </span>
+              )}
+            </p>
           </div>
           <button onClick={onClose} className="text-muted hover:text-text p-1">
             <X size={18} />
@@ -759,6 +802,10 @@ function StoreDrillModal({
                       <th className="text-right px-5 py-2 font-medium">YoY %</th>
                       <th className="text-right px-5 py-2 font-medium">MoM %</th>
                       <th className="text-right px-5 py-2 font-medium">Покупок</th>
+                      {hasFocus && <>
+                        <th className="text-right px-5 py-2 font-medium text-accent" title="Focus: средний чек">Ср. чек</th>
+                        <th className="text-right px-5 py-2 font-medium text-accent" title="Focus: число чеков">Чеков</th>
+                      </>}
                       <th className="text-right px-5 py-2 font-medium">АП</th>
                     </tr>
                   </thead>
@@ -787,6 +834,17 @@ function StoreDrillModal({
                         <td className="px-5 py-2 text-right num text-muted">
                           {p.purchases != null ? fmtInt(p.purchases) : '—'}
                         </td>
+                        {hasFocus && (() => {
+                          const f = focusMap.get(`${p.year}-${p.month}`);
+                          return <>
+                            <td className="px-5 py-2 text-right num">
+                              {f?.avgCheck != null ? fmtInt(f.avgCheck) + ' ₽' : '—'}
+                            </td>
+                            <td className="px-5 py-2 text-right num">
+                              {f?.receipts != null ? fmtInt(f.receipts) : '—'}
+                            </td>
+                          </>;
+                        })()}
                         <td className="px-5 py-2 text-right num text-muted">
                           {p.ap != null ? fmtShort(p.ap) : '—'}
                         </td>

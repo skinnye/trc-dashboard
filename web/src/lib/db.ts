@@ -235,6 +235,27 @@ CREATE TABLE IF NOT EXISTS turnover_monthly (
 CREATE INDEX IF NOT EXISTS idx_turnover_monthly_year_month ON turnover_monthly(year, month);
 CREATE INDEX IF NOT EXISTS idx_turnover_monthly_store      ON turnover_monthly(store_name);
 
+-- ── Focus: поведенческие метрики из кассовой выгрузки ─────────────────
+-- Заполняется parser/import_focus.py. Товарооборот/продажи Focus НЕ берём
+-- (у нас свой ТО), только средний чек, число чеков, продажи/м², возвраты.
+-- store_name сматчен к turnover_monthly (NULL если магазин не привязан).
+CREATE TABLE IF NOT EXISTS focus_monthly (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_name    TEXT,
+  focus_name    TEXT NOT NULL,
+  year          INTEGER NOT NULL,
+  month         INTEGER NOT NULL,
+  avg_check     REAL,
+  receipts      REAL,
+  sales_per_m2  REAL,
+  returns       REAL,
+  source_file   TEXT NOT NULL,
+  imported_at   TEXT NOT NULL,
+  UNIQUE(focus_name, year, month)
+);
+CREATE INDEX IF NOT EXISTS idx_focus_store      ON focus_monthly(store_name);
+CREATE INDEX IF NOT EXISTS idx_focus_year_month ON focus_monthly(year, month);
+
 -- ── Application settings (key-value) ──────────────────────────────────
 -- Динамические настройки приложения, которые пользователь может менять
 -- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу

@@ -259,6 +259,10 @@ export interface TenantPeriodRow {
   curMatched: number | null;    // ТО этого года за месяцы, совпавшие с пред. годом
   prevMatched: number | null;   // ТО пред. года за те же месяцы
   matchedMonths: number;        // сколько месяцев сопоставлено
+  // Поведенческие метрики из Focus (касса) за тот же год, если магазин сматчен.
+  focusAvgCheck: number | null;     // средний чек, ₽ (взвешенный по числу чеков)
+  focusReceipts: number | null;     // суммарное число чеков за период
+  focusSalesPerM2: number | null;   // средние продажи/м² за период
 }
 
 export function getTenantPeriodYoY(year: number): TenantPeriodRow[] {
@@ -290,6 +294,17 @@ export function getTenantPeriodYoY(year: number): TenantPeriodRow[] {
         FROM cur c
         JOIN prev p ON p.store_name = c.store_name AND p.month = c.month
         GROUP BY c.store_name
+      ),
+      focus_agg AS (
+        SELECT store_name,
+               SUM(receipts) AS f_receipts,
+               CASE WHEN SUM(receipts) > 0
+                    THEN SUM(avg_check * receipts) / SUM(receipts)
+                    ELSE NULL END AS f_avg_check,
+               AVG(sales_per_m2) AS f_sales_per_m2
+        FROM focus_monthly
+        WHERE year = ? AND store_name IS NOT NULL
+        GROUP BY store_name
       )
       SELECT y.store_name           AS storeName,
              y.arendator            AS arendator,
@@ -303,14 +318,42 @@ export function getTenantPeriodYoY(year: number): TenantPeriodRow[] {
              ca.m_max               AS periodMax,
              mt.cur_matched         AS curMatched,
              mt.prev_matched        AS prevMatched,
-             COALESCE(mt.matched_months, 0) AS matchedMonths
+             COALESCE(mt.matched_months, 0) AS matchedMonths,
+             fa.f_avg_check         AS focusAvgCheck,
+             fa.f_receipts          AS focusReceipts,
+             fa.f_sales_per_m2      AS focusSalesPerM2
       FROM turnover_yearly y
-      LEFT JOIN cur_agg ca ON ca.store_name = y.store_name
-      LEFT JOIN matched mt ON mt.store_name = y.store_name
+      LEFT JOIN cur_agg ca   ON ca.store_name = y.store_name
+      LEFT JOIN matched mt   ON mt.store_name = y.store_name
+      LEFT JOIN focus_agg fa ON fa.store_name = y.store_name
       WHERE y.year = ?
       ORDER BY ca.cur_period DESC NULLS LAST, y.store_name
     `)
-    .all(year, year - 1, year) as unknown as TenantPeriodRow[];
+    .all(year, year - 1, year, year) as unknown as TenantPeriodRow[];
+}
+
+// Помесячная история метрик Focus по магазину (для карточки магазина).
+export interface StoreFocusPoint {
+  year: number;
+  month: number;
+  avgCheck: number | null;
+  receipts: number | null;
+  salesPerM2: number | null;
+  returns: number | null;
+}
+export function getStoreFocusTimeline(storeName: string): StoreFocusPoint[] {
+  return db()
+    .prepare(`
+      SELECT year, month,
+             avg_check    AS avgCheck,
+             receipts     AS receipts,
+             sales_per_m2 AS salesPerM2,
+             returns      AS returns
+      FROM focus_monthly
+      WHERE store_name = ?
+      ORDER BY year, month
+    `)
+    .all(storeName) as unknown as StoreFocusPoint[];
 }
 
 // ── Сезонные тепловые карты: общая строка-матрица для трёх режимов ─────

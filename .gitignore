@@ -77,3 +77,4 @@ __pycache__/
 # ставится через `pip install -e ./vendor-parser-2gis` локально.
 # В репо сам исходник не тащим — на другой машине склонировать вручную.
 parser/vendor-parser-2gis/
+/FOCUS_RECONCILIATION.md

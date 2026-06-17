@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStoreMonthlyTimeline, getStoreTimeline } from '@/lib/turnover';
+import { getStoreMonthlyTimeline, getStoreTimeline, getStoreFocusTimeline } from '@/lib/turnover';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,5 +11,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ store: string 
     store,
     yearly:  getStoreTimeline(store),
     monthly: getStoreMonthlyTimeline(store),
+    focus:   getStoreFocusTimeline(store),
   });
 }
