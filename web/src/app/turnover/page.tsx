@@ -557,7 +557,7 @@ function MonthlyTab({
       <Card className="mt-6">
         <CardHeader
           title={`Сезонная карта · ${modeTitle}`}
-          subtitle="Цвет — индекс месяца к среднему по строке (синий = ниже, зелёный = средний, жёлтый/красный = пик)."
+          subtitle="Цвет — индекс месяца к среднему по строке: красный = плохо, жёлтый = норм, зелёный = хорошо, лайм = очень хорошо."
           right={
             <div className="flex items-center gap-2 flex-wrap justify-end">
               {/* Режим */}
@@ -623,16 +623,16 @@ function MonthlyTab({
         <div className="mt-3 text-xs text-muted flex items-center gap-3 flex-wrap">
           <span>Легенда:</span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-3 h-3 rounded" style={{ background: 'rgba(96, 165, 250, 0.20)' }}/> &lt;70% от среднего
+            <span className="w-3 h-3 rounded" style={{ background: 'rgba(239, 68, 68, 0.55)' }}/> плохо (&lt;70%)
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-3 h-3 rounded" style={{ background: 'rgba(52, 211, 153, 0.45)' }}/> ~средний
+            <span className="w-3 h-3 rounded" style={{ background: 'rgba(251, 191, 36, 0.55)' }}/> норм (~средний)
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-3 h-3 rounded" style={{ background: 'rgba(251, 191, 36, 0.55)' }}/> +15%
+            <span className="w-3 h-3 rounded" style={{ background: 'rgba(52, 211, 153, 0.45)' }}/> хорошо (+10%)
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-3 h-3 rounded" style={{ background: 'rgba(239, 68, 68, 0.55)' }}/> +35% пик
+            <span className="w-3 h-3 rounded" style={{ background: 'rgba(163, 230, 53, 0.65)' }}/> оч хорошо (+30%)
           </span>
         </div>
       </Card>
@@ -678,12 +678,15 @@ function HeatTable({
                 </td>
                 {row.m.map((v, i) => {
                   const idx = avg > 0 && v != null ? v / avg : 0;
+                  // Цвет по смыслу: ниже среднего = плохо (красный),
+                  // около среднего = норм (жёлтый), выше = хорошо (зелёный),
+                  // пик = очень хорошо (ярко-лаймовый).
                   const bg = v == null ? 'transparent'
-                    : idx < 0.7  ? 'rgba(96, 165, 250, 0.20)'
-                    : idx < 0.95 ? 'rgba(52, 211, 153, 0.15)'
-                    : idx < 1.15 ? 'rgba(52, 211, 153, 0.45)'
-                    : idx < 1.35 ? 'rgba(251, 191, 36, 0.55)'
-                    :              'rgba(239, 68, 68, 0.55)';
+                    : idx < 0.7  ? 'rgba(239, 68, 68, 0.55)'    // плохо — красный
+                    : idx < 0.9  ? 'rgba(251, 146, 60, 0.50)'   // ниже нормы — оранжевый
+                    : idx < 1.1  ? 'rgba(251, 191, 36, 0.55)'   // норм — жёлтый
+                    : idx < 1.3  ? 'rgba(52, 211, 153, 0.45)'   // хорошо — зелёный
+                    :              'rgba(163, 230, 53, 0.65)';  // оч хорошо — лайм
                   return (
                     <td key={i}
                         style={{ background: bg }}
