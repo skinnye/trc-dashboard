@@ -236,3 +236,165 @@ export function getStoreMonthlyTimeline(storeName: string): StoreMonthlyTimeline
     `)
     .all(storeName) as unknown as StoreMonthlyTimelinePoint[];
 }
+
+// ── Корректное сравнение: период-в-период YoY ─────────────────────────
+// Готовый to_yoy_pct из Excel ненадёжен (для 2026 правдоподобны лишь 8 из
+// 52 значений, разброс −98%..+1116%). Считаем сравнение сами:
+//   • ТО за ДОСТУПНЫЙ период этого года (YTD) — сумма помесячных за месяцы,
+//     где у магазина есть данные (у 2026 это обычно Янв–Май);
+//   • YoY = сумма за СОВПАДАЮЩИЕ месяцы этого года ÷ те же месяцы прошлого
+//     года − 1. Сопоставляем только месяцы, присутствующие в ОБОИХ годах,
+//     чтобы сравнение было «как с как» (а не YTD vs полный год).
+export interface TenantPeriodRow {
+  storeName: string;
+  arendator: string | null;
+  category: string | null;
+  areaM2: number | null;
+  toPerM2: number | null;       // ТО/м² из годового листа (для вкладки эффективности)
+  apWithTo: number | null;
+  toPeriodCur: number | null;   // ТО за доступный период этого года (YTD)
+  curMonths: number;            // сколько месяцев с данными в этом году
+  periodMin: number | null;     // первый месяц периода (1..12)
+  periodMax: number | null;     // последний месяц периода
+  curMatched: number | null;    // ТО этого года за месяцы, совпавшие с пред. годом
+  prevMatched: number | null;   // ТО пред. года за те же месяцы
+  matchedMonths: number;        // сколько месяцев сопоставлено
+}
+
+export function getTenantPeriodYoY(year: number): TenantPeriodRow[] {
+  return db()
+    .prepare(`
+      WITH cur AS (
+        SELECT store_name, month, to_sum
+        FROM turnover_monthly
+        WHERE year = ? AND to_sum IS NOT NULL
+      ),
+      prev AS (
+        SELECT store_name, month, to_sum
+        FROM turnover_monthly
+        WHERE year = ? AND to_sum IS NOT NULL
+      ),
+      cur_agg AS (
+        SELECT store_name,
+               SUM(to_sum) AS cur_period,
+               COUNT(*)    AS cur_months,
+               MIN(month)  AS m_min,
+               MAX(month)  AS m_max
+        FROM cur GROUP BY store_name
+      ),
+      matched AS (
+        SELECT c.store_name,
+               SUM(c.to_sum) AS cur_matched,
+               SUM(p.to_sum) AS prev_matched,
+               COUNT(*)      AS matched_months
+        FROM cur c
+        JOIN prev p ON p.store_name = c.store_name AND p.month = c.month
+        GROUP BY c.store_name
+      )
+      SELECT y.store_name           AS storeName,
+             y.arendator            AS arendator,
+             y.category             AS category,
+             y.area_m2              AS areaM2,
+             y.to_per_m2            AS toPerM2,
+             y.ap_with_to           AS apWithTo,
+             ca.cur_period          AS toPeriodCur,
+             COALESCE(ca.cur_months, 0) AS curMonths,
+             ca.m_min               AS periodMin,
+             ca.m_max               AS periodMax,
+             mt.cur_matched         AS curMatched,
+             mt.prev_matched        AS prevMatched,
+             COALESCE(mt.matched_months, 0) AS matchedMonths
+      FROM turnover_yearly y
+      LEFT JOIN cur_agg ca ON ca.store_name = y.store_name
+      LEFT JOIN matched mt ON mt.store_name = y.store_name
+      WHERE y.year = ?
+      ORDER BY ca.cur_period DESC NULLS LAST, y.store_name
+    `)
+    .all(year, year - 1, year) as unknown as TenantPeriodRow[];
+}
+
+// ── Сезонные тепловые карты: общая строка-матрица для трёх режимов ─────
+//   • по магазинам (getYearStoreMonthlyMatrix, уже есть)
+//   • по годам      (getYearMonthHeat)      — годы × месяцы по всему ТРЦ
+//   • по категориям (getCategoryMonthHeat)  — категории × месяцы за год
+// Цвет ячейки на фронте — индекс месяца к среднему по строке, поэтому
+// строки разного масштаба сравниваются в одной шкале.
+export interface HeatRow {
+  label: string;
+  sublabel: string | null;
+  m: (number | null)[];   // 12 элементов, индекс 0 = январь
+  total: number;          // сумма за строку (для метрики to_sum) или средн.
+}
+
+type HeatMetric = 'to_sum' | 'to_per_m2';
+
+function pivotHeat(
+  rows: { key: string; sub: string | null; month: number; v: number | null }[],
+  metric: HeatMetric,
+): HeatRow[] {
+  const map = new Map<string, HeatRow>();
+  const order: string[] = [];
+  for (const r of rows) {
+    let row = map.get(r.key);
+    if (!row) {
+      row = { label: r.key, sublabel: r.sub, m: Array(12).fill(null), total: 0 };
+      map.set(r.key, row);
+      order.push(r.key);
+    }
+    if (r.month >= 1 && r.month <= 12) row.m[r.month - 1] = r.v;
+  }
+  // total: для to_sum — сумма за год; для to_per_m2 — среднее по месяцам.
+  for (const row of map.values()) {
+    const vals = row.m.filter((x): x is number => x != null);
+    row.total = metric === 'to_per_m2'
+      ? (vals.length ? vals.reduce((s, x) => s + x, 0) / vals.length : 0)
+      : vals.reduce((s, x) => s + x, 0);
+  }
+  return order.map(k => map.get(k)!).sort((a, b) => b.total - a.total);
+}
+
+// Годы × месяцы — весь ТРЦ. Для to_sum: сумма ТО всех магазинов за месяц;
+// для to_per_m2: средний ТО/м² по магазинам. Строки — годы (свежие сверху).
+export function getYearMonthHeat(metric: HeatMetric = 'to_sum'): HeatRow[] {
+  const agg = metric === 'to_per_m2' ? 'AVG(to_per_m2)' : 'SUM(to_sum)';
+  const rows = db()
+    .prepare(`
+      SELECT year AS y, month AS month, ${agg} AS v
+      FROM turnover_monthly
+      WHERE ${metric === 'to_per_m2' ? 'to_per_m2' : 'to_sum'} IS NOT NULL
+      GROUP BY year, month
+      ORDER BY year DESC, month
+    `)
+    .all() as { y: number; month: number; v: number | null }[];
+  const mapped = rows.map(r => ({ key: String(r.y), sub: null, month: r.month, v: r.v }));
+  // Для годов сортируем по году (свежие сверху), а не по total.
+  const heat = pivotHeat(mapped, metric);
+  return heat.sort((a, b) => Number(b.label) - Number(a.label));
+}
+
+// Категории × месяцы за конкретный год.
+export function getCategoryMonthHeat(year: number, metric: HeatMetric = 'to_sum'): HeatRow[] {
+  const agg = metric === 'to_per_m2' ? 'AVG(to_per_m2)' : 'SUM(to_sum)';
+  const rows = db()
+    .prepare(`
+      SELECT COALESCE(NULLIF(TRIM(category), ''), '— без категории') AS cat,
+             month AS month, ${agg} AS v,
+             COUNT(DISTINCT store_name) AS stores
+      FROM turnover_monthly
+      WHERE year = ? AND ${metric === 'to_per_m2' ? 'to_per_m2' : 'to_sum'} IS NOT NULL
+      GROUP BY cat, month
+      ORDER BY cat, month
+    `)
+    .all(year) as { cat: string; month: number; v: number | null; stores: number }[];
+  // Считаем число магазинов в категории для подписи.
+  const storeCount = new Map<string, number>();
+  for (const r of rows) {
+    storeCount.set(r.cat, Math.max(storeCount.get(r.cat) ?? 0, r.stores));
+  }
+  const mapped = rows.map(r => ({
+    key: r.cat,
+    sub: `${storeCount.get(r.cat) ?? 0} маг.`,
+    month: r.month, v: r.v,
+  }));
+  return pivotHeat(mapped, metric);
+}
