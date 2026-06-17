@@ -49,17 +49,24 @@ export default function CategoryPage({ params }: { params: Promise<{ id: string 
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [dyn, setDyn] = useState<{ newcomers: Newcomer[]; dropouts: Newcomer[]; trend: TrendPoint[] } | null>(null);
+  // Охват берём из ?scope= в URL (передан со страницы /external).
+  const [scope, setScope] = useState('district');
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get('scope');
+    if (s) setScope(s);
+  }, []);
 
   useEffect(() => {
-    fetch(`/api/external/category/${id}`)
+    const q = `?scope=${encodeURIComponent(scope)}`;
+    fetch(`/api/external/category/${id}${q}`)
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(setData)
       .catch(() => setError('Категория не найдена'));
-    fetch(`/api/external/category/${id}/dynamics`)
+    fetch(`/api/external/category/${id}/dynamics${q}`)
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(setDyn)
       .catch(() => {});
-  }, [id]);
+  }, [id, scope]);
 
   // Тренд кол-ва организаций по прогонам — линейный график.
   // Строим только если прогонов больше одного, иначе отображать нечего.

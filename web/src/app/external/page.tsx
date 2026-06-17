@@ -8,7 +8,7 @@ import { LiveBadge } from '@/components/LiveBadge';
 import { Card, CardHeader, Stat } from '@/components/Card';
 import { ChartWrap } from '@/components/Chart';
 import { fmtInt, cn } from '@/lib/utils';
-import { ExternalLink, Search, Database, Layers, Building2, Star, Map as MapIcon } from 'lucide-react';
+import { ExternalLink, Search, Database, Layers, Building2, Star, Map as MapIcon, MapPin, Globe, Store } from 'lucide-react';
 
 // Heatmap тащит Leaflet, который не дружит с SSR. ssr:false +
 // fallback-плейсхолдер, пока чанк качается.
@@ -50,6 +50,7 @@ type MapPoint = {
   rating: number | null; reviews: number | null;
 };
 type HeatMode = 'count' | 'reviews' | 'rating';
+type ScopeInfo = { scope: string; label: string; runId: number; startedAt: string; orgs: number };
 
 export default function ExternalPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -60,25 +61,29 @@ export default function ExternalPage() {
   const [mapPoints, setMapPoints] = useState<MapPoint[] | null>(null);
   const [mapCategory, setMapCategory] = useState<number | 'all'>('all');
   const [heatMode, setHeatMode] = useState<HeatMode>('count');
+  const [scope, setScope] = useState('district');
+  const [scopes, setScopes] = useState<ScopeInfo[]>([]);
 
   useEffect(() => {
-    fetch('/api/external/summary')
+    fetch(`/api/external/summary?scope=${encodeURIComponent(scope)}`)
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(d => {
         setSummary(d.summary);
         setCategories(d.categories);
         setDynamics(d.dynamics ?? null);
+        if (d.scopes) setScopes(d.scopes);
       })
       .catch(() => setError('Не удалось загрузить данные'));
-  }, []);
+  }, [scope]);
 
-  // Точки для карты грузим один раз для всех категорий — фильтр работает в браузере.
+  // Точки карты грузим под выбранный охват — фильтр по категории в браузере.
   useEffect(() => {
-    fetch('/api/external/map')
+    setMapPoints(null);
+    fetch(`/api/external/map?scope=${encodeURIComponent(scope)}`)
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(d => setMapPoints(d.points))
       .catch(() => {});
-  }, []);
+  }, [scope]);
 
   const filteredMapPoints = useMemo(() => {
     if (!mapPoints) return [];
@@ -170,8 +175,8 @@ export default function ExternalPage() {
           <div>
             <h1 className="text-3xl font-bold">Внешний контур · 2GIS</h1>
             <p className="text-sm text-muted mt-1">
-              Снапшоты категорий и организаций вокруг ТРЦ. Парсер собирает данные раз в неделю —
-              здесь видна динамика рейтингов, отзывов и состава категорий.
+              Снапшоты категорий и организаций. Охват: район Академический (границы из ссылок),
+              весь Екатеринбург или другой ТРЦ.
             </p>
           </div>
           {dynamics?.hasMultipleRuns && (
@@ -191,6 +196,37 @@ export default function ExternalPage() {
 
         {error && (
           <Card className="bg-bad/10 border-bad/30 text-bad text-sm">{error}</Card>
+        )}
+
+        {/* Scope selector — район / город / другие ТРЦ */}
+        {scopes.length > 0 && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm text-muted">Охват:</span>
+            <div className="flex gap-1 p-1 bg-surface border border-border rounded-xl overflow-x-auto">
+              {scopes.map(s => {
+                const Icon = s.scope === 'district' ? MapPin : s.scope === 'city' ? Globe : Store;
+                return (
+                  <button key={s.scope}
+                    onClick={() => { setScope(s.scope); setMapCategory('all'); }}
+                    className={cn(
+                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
+                      scope === s.scope
+                        ? 'bg-accent/20 text-accent border border-accent/40'
+                        : 'text-muted hover:text-text hover:bg-surface2 border border-transparent',
+                    )}>
+                    <Icon size={14} />
+                    {s.label}
+                    <span className="text-xs text-muted">· {fmtInt(s.orgs)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {scopes.find(s => s.scope === scope) && (
+              <span className="text-xs text-muted">
+                прогон от {scopes.find(s => s.scope === scope)!.startedAt.slice(0, 10)}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Top stats */}
@@ -352,7 +388,7 @@ export default function ExternalPage() {
                   <tr key={c.id} className="border-b border-border/50 hover:bg-surface2/50">
                     <td className="px-5 py-2.5">
                       <Link
-                        href={`/external/${c.id}`}
+                        href={`/external/${c.id}?scope=${encodeURIComponent(scope)}`}
                         className="font-medium text-text hover:text-accent flex items-center gap-2"
                       >
                         <Building2 size={14} className="text-muted shrink-0" />

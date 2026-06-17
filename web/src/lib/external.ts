@@ -7,6 +7,63 @@
  */
 import { db } from './db';
 
+// ── Охваты (scope) ────────────────────────────────────────────────────
+// Ссылки в Excel имеют границы карты = район Академический. Парсер умеет
+// собирать в трёх охватах, помечая ext_runs.source:
+//   district → '2gis-district' (или старый 'excel-import' — тоже район)
+//   city     → '2gis-city'     (или старый 'parser-2gis' — был по городу)
+//   mall:X   → '2gis-mall:X'   (вокруг другого ТРЦ)
+// UI выбирает охват, а мы резолвим последний успешный прогон этого охвата.
+export type ExtScope = string; // 'district' | 'city' | 'mall:<name>'
+
+function scopeSourceSql(scope: string): string {
+  if (scope === 'city') return `source IN ('2gis-city','parser-2gis')`;
+  if (scope.startsWith('mall:')) {
+    // source хранит '2gis-mall:<label>'. Чистим кавычки во избежание инъекции.
+    const name = scope.slice(5).replace(/'/g, '');
+    return `source = '2gis-mall:${name}'`;
+  }
+  return `source IN ('2gis-district','excel-import')`;
+}
+
+// Последний успешный непустой прогон выбранного охвата.
+export function resolveRunId(scope: ExtScope = 'district'): number | null {
+  const r = db()
+    .prepare(`SELECT MAX(id) AS id FROM ext_runs
+              WHERE status = 'ok' AND total_orgs > 0 AND ${scopeSourceSql(scope)}`)
+    .get() as { id: number | null };
+  return r?.id ?? null;
+}
+
+export interface ScopeInfo {
+  scope: string; label: string; runId: number;
+  startedAt: string; orgs: number;
+}
+
+// Доступные охваты (с данными) для селектора в UI.
+export function listScopes(): ScopeInfo[] {
+  const conn = db();
+  const out: ScopeInfo[] = [];
+  const add = (scope: string, label: string) => {
+    const id = resolveRunId(scope);
+    if (!id) return;
+    const r = conn.prepare('SELECT started_at AS s, total_orgs AS o FROM ext_runs WHERE id = ?')
+      .get(id) as { s: string; o: number };
+    out.push({ scope, label, runId: id, startedAt: r.s, orgs: r.o ?? 0 });
+  };
+  add('district', 'Район Академический');
+  add('city', 'Весь Екатеринбург');
+  const malls = conn
+    .prepare(`SELECT DISTINCT source FROM ext_runs
+              WHERE status = 'ok' AND total_orgs > 0 AND source LIKE '2gis-mall:%'`)
+    .all() as { source: string }[];
+  for (const m of malls) {
+    const name = m.source.slice('2gis-mall:'.length);
+    add(`mall:${name}`, `ТРЦ ${name}`);
+  }
+  return out;
+}
+
 export interface ExternalSummary {
   categoriesCount: number;
   orgsCount: number;
@@ -15,23 +72,30 @@ export interface ExternalSummary {
   lastRun: { id: number; startedAt: string; finishedAt: string | null; status: string; totalOrgs: number | null } | null;
 }
 
-export function getExternalSummary(): ExternalSummary {
+export function getExternalSummary(scope: ExtScope = 'district'): ExternalSummary {
   const conn = db();
+  const runId = resolveRunId(scope);
   const cats = conn.prepare('SELECT COUNT(*) AS n FROM ext_categories WHERE active = 1').get() as { n: number };
-  const orgs = conn.prepare('SELECT COUNT(*) AS n FROM ext_orgs').get() as { n: number };
-  const dups = conn.prepare('SELECT COUNT(*) AS n FROM ext_orgs WHERE is_duplicate = 1').get() as { n: number };
   const runs = conn.prepare('SELECT COUNT(*) AS n FROM ext_runs').get() as { n: number };
-  const last = conn
-    .prepare(`
-      SELECT id, started_at AS startedAt, finished_at AS finishedAt,
-             status, total_orgs AS totalOrgs
-      FROM ext_runs ORDER BY id DESC LIMIT 1
-    `)
-    .get() as ExternalSummary['lastRun'];
+  // Орги и дубли — в рамках выбранного охвата (по снапшотам его прогона).
+  let orgsCount = 0, dupCount = 0;
+  if (runId) {
+    orgsCount = (conn.prepare('SELECT COUNT(DISTINCT org_id) AS n FROM ext_snapshots WHERE run_id = ?')
+      .get(runId) as { n: number }).n;
+    dupCount = (conn.prepare(`SELECT COUNT(DISTINCT s.org_id) AS n FROM ext_snapshots s
+                              JOIN ext_orgs o ON o.id = s.org_id
+                              WHERE s.run_id = ? AND o.is_duplicate = 1`)
+      .get(runId) as { n: number }).n;
+  }
+  const last = runId
+    ? (conn.prepare(`SELECT id, started_at AS startedAt, finished_at AS finishedAt,
+                            status, total_orgs AS totalOrgs FROM ext_runs WHERE id = ?`)
+        .get(runId) as ExternalSummary['lastRun'])
+    : null;
   return {
     categoriesCount: cats.n,
-    orgsCount: orgs.n,
-    duplicatesCount: dups.n,
+    orgsCount,
+    duplicatesCount: dupCount,
     runs: runs.n,
     lastRun: last ?? null,
   };
@@ -47,31 +111,26 @@ export interface CategoryRow {
   totalReviews: number | null;
 }
 
-export function getCategoriesOverview(): CategoryRow[] {
+export function getCategoriesOverview(scope: ExtScope = 'district'): CategoryRow[] {
+  const runId = resolveRunId(scope);
+  if (!runId) return [];
+  // orgsCount/рейтинги — только по оргам, попавшим в прогон этого охвата.
   return db()
     .prepare(`
-      WITH latest AS (
-        SELECT MAX(id) AS run_id FROM ext_runs WHERE status = 'ok'
-      ),
-      org_metrics AS (
-        SELECT s.org_id, s.rating, s.reviews_count
-        FROM ext_snapshots s, latest
-        WHERE s.run_id = latest.run_id
-      )
       SELECT
         c.id, c.name, c.search_url AS searchUrl,
-        COUNT(o.id) AS orgsCount,
-        SUM(CASE WHEN o.is_duplicate = 1 THEN 1 ELSE 0 END) AS duplicatesCount,
-        AVG(m.rating) AS avgRating,
-        SUM(m.reviews_count) AS totalReviews
+        COUNT(s.org_id) AS orgsCount,
+        SUM(CASE WHEN o.is_duplicate = 1 AND s.org_id IS NOT NULL THEN 1 ELSE 0 END) AS duplicatesCount,
+        AVG(s.rating) AS avgRating,
+        SUM(s.reviews_count) AS totalReviews
       FROM ext_categories c
       LEFT JOIN ext_orgs o      ON o.category_id = c.id
-      LEFT JOIN org_metrics m   ON m.org_id = o.id
+      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
       WHERE c.active = 1
       GROUP BY c.id
       ORDER BY orgsCount DESC, c.name
     `)
-    .all() as unknown as CategoryRow[];
+    .all(runId) as unknown as CategoryRow[];
 }
 
 export interface OrgRow {
@@ -91,35 +150,27 @@ export interface OrgRow {
   latitude: number | null;
 }
 
-export function getCategory(categoryId: number): { category: CategoryRow | null; orgs: OrgRow[] } {
+export function getCategory(categoryId: number, scope: ExtScope = 'district'): { category: CategoryRow | null; orgs: OrgRow[] } {
   const conn = db();
+  const runId = resolveRunId(scope);
   const cat = conn
     .prepare(`
-      WITH latest AS (
-        SELECT MAX(id) AS run_id FROM ext_runs WHERE status = 'ok'
-      ),
-      org_metrics AS (
-        SELECT s.org_id, s.rating, s.reviews_count
-        FROM ext_snapshots s, latest WHERE s.run_id = latest.run_id
-      )
       SELECT c.id, c.name, c.search_url AS searchUrl,
-             COUNT(o.id) AS orgsCount,
-             SUM(CASE WHEN o.is_duplicate = 1 THEN 1 ELSE 0 END) AS duplicatesCount,
-             AVG(m.rating) AS avgRating,
-             SUM(m.reviews_count) AS totalReviews
+             COUNT(s.org_id) AS orgsCount,
+             SUM(CASE WHEN o.is_duplicate = 1 AND s.org_id IS NOT NULL THEN 1 ELSE 0 END) AS duplicatesCount,
+             AVG(s.rating) AS avgRating,
+             SUM(s.reviews_count) AS totalReviews
       FROM ext_categories c
-      LEFT JOIN ext_orgs o    ON o.category_id = c.id
-      LEFT JOIN org_metrics m ON m.org_id = o.id
+      LEFT JOIN ext_orgs o      ON o.category_id = c.id
+      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
       WHERE c.id = ?
       GROUP BY c.id
     `)
-    .get(categoryId) as unknown as CategoryRow | undefined;
+    .get(runId, categoryId) as unknown as CategoryRow | undefined;
 
+  // Только организации, попавшие в прогон выбранного охвата.
   const orgs = conn
     .prepare(`
-      WITH latest AS (
-        SELECT MAX(id) AS run_id FROM ext_runs WHERE status = 'ok'
-      )
       SELECT
         o.id, o.name, o.address, o.street,
         o.is_duplicate AS isDuplicate,
@@ -128,12 +179,11 @@ export function getCategory(categoryId: number): { category: CategoryRow | null;
         s.website, s.phones, s.hours,
         s.longitude, s.latitude
       FROM ext_orgs o
-      LEFT JOIN latest l ON 1=1
-      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = l.run_id
+      JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
       WHERE o.category_id = ?
       ORDER BY (s.reviews_count IS NULL), s.reviews_count DESC, o.name
     `)
-    .all(categoryId) as unknown as OrgRow[];
+    .all(runId, categoryId) as unknown as OrgRow[];
 
   return { category: cat ?? null, orgs };
 }
@@ -145,13 +195,11 @@ export interface OrgHistoryPoint {
   reviewsCount: number | null;
 }
 
-export function getOrg(orgId: number): { org: (OrgRow & { categoryId: number; categoryName: string }) | null; history: OrgHistoryPoint[] } {
+export function getOrg(orgId: number, scope: ExtScope = 'district'): { org: (OrgRow & { categoryId: number; categoryName: string }) | null; history: OrgHistoryPoint[] } {
   const conn = db();
+  const runId = resolveRunId(scope);
   const org = conn
     .prepare(`
-      WITH latest AS (
-        SELECT MAX(id) AS run_id FROM ext_runs WHERE status = 'ok'
-      )
       SELECT
         o.id, o.name, o.address, o.street,
         o.is_duplicate AS isDuplicate,
@@ -162,11 +210,10 @@ export function getOrg(orgId: number): { org: (OrgRow & { categoryId: number; ca
         s.longitude, s.latitude
       FROM ext_orgs o
       JOIN ext_categories c ON c.id = o.category_id
-      LEFT JOIN latest l ON 1=1
-      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = l.run_id
+      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
       WHERE o.id = ?
     `)
-    .get(orgId) as unknown as (OrgRow & { categoryId: number; categoryName: string }) | undefined;
+    .get(runId, orgId) as unknown as (OrgRow & { categoryId: number; categoryName: string }) | undefined;
 
   const history = conn
     .prepare(`
@@ -211,12 +258,11 @@ export interface MapPoint {
  * Берём данные из последнего успешного прогона. Без LIMIT — карта рендерит
  * все ~1000 точек одной волной, разбиение страницами тут не нужно.
  */
-export function getMapPoints(categoryId?: number): MapPoint[] {
+export function getMapPoints(categoryId?: number, scope: ExtScope = 'district'): MapPoint[] {
   const conn = db();
+  const runId = resolveRunId(scope);
+  if (!runId) return [];
   const baseSql = `
-    WITH latest AS (
-      SELECT MAX(id) AS run_id FROM ext_runs WHERE status = 'ok'
-    )
     SELECT
       o.id            AS orgId,
       o.name          AS name,
@@ -229,15 +275,14 @@ export function getMapPoints(categoryId?: number): MapPoint[] {
     FROM ext_snapshots s
     JOIN ext_orgs o       ON o.id = s.org_id
     JOIN ext_categories c ON c.id = o.category_id
-    JOIN latest l         ON s.run_id = l.run_id
-    WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
+    WHERE s.run_id = ? AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL
   `;
   if (categoryId) {
     return conn
       .prepare(baseSql + ' AND o.category_id = ?')
-      .all(categoryId) as unknown as MapPoint[];
+      .all(runId, categoryId) as unknown as MapPoint[];
   }
-  return conn.prepare(baseSql).all() as unknown as MapPoint[];
+  return conn.prepare(baseSql).all(runId) as unknown as MapPoint[];
 }
 
 export function listRuns(limit = 50): RunRow[] {
@@ -271,23 +316,26 @@ export interface NewcomerRow {
   lastSeenAt: string;
 }
 
-function latestRunStarted(): string | null {
-  const r = db()
-    .prepare(`SELECT started_at AS startedAt FROM ext_runs WHERE status = 'ok' ORDER BY id DESC LIMIT 1`)
-    .get() as { startedAt?: string } | undefined;
+function latestRunStarted(scope: ExtScope = 'district'): string | null {
+  const id = resolveRunId(scope);
+  if (!id) return null;
+  const r = db().prepare('SELECT started_at AS startedAt FROM ext_runs WHERE id = ?')
+    .get(id) as { startedAt?: string } | undefined;
   return r?.startedAt ?? null;
 }
 
-function okRunsCount(): number {
-  const r = db().prepare(`SELECT COUNT(*) AS n FROM ext_runs WHERE status = 'ok'`).get() as { n: number };
+function okRunsCount(scope: ExtScope = 'district'): number {
+  const r = db()
+    .prepare(`SELECT COUNT(*) AS n FROM ext_runs
+              WHERE status = 'ok' AND total_orgs > 0 AND ${scopeSourceSql(scope)}`)
+    .get() as { n: number };
   return r.n;
 }
 
-export function getNewcomers(categoryId?: number, limit = 200): NewcomerRow[] {
-  // Если в системе только один успешный прогон — «новых» по определению нет:
-  // первая загрузка проставляет всем first_seen_at, и сравнивать не с чем.
-  if (okRunsCount() < 2) return [];
-  const start = latestRunStarted();
+export function getNewcomers(categoryId?: number, scope: ExtScope = 'district', limit = 200): NewcomerRow[] {
+  // Если в этом охвате только один успешный прогон — «новых» по определению нет.
+  if (okRunsCount(scope) < 2) return [];
+  const start = latestRunStarted(scope);
   if (!start) return [];
   const args: (string | number)[] = [start];
   let where = 'o.first_seen_at >= ?';
@@ -307,9 +355,9 @@ export function getNewcomers(categoryId?: number, limit = 200): NewcomerRow[] {
     .all(...args) as unknown as NewcomerRow[];
 }
 
-export function getDropouts(categoryId?: number, limit = 200): NewcomerRow[] {
-  if (okRunsCount() < 2) return [];
-  const start = latestRunStarted();
+export function getDropouts(categoryId?: number, scope: ExtScope = 'district', limit = 200): NewcomerRow[] {
+  if (okRunsCount(scope) < 2) return [];
+  const start = latestRunStarted(scope);
   if (!start) return [];
   const args: (string | number)[] = [start];
   let where = 'o.last_seen_at < ?';
@@ -365,19 +413,19 @@ export interface DynamicsSummary {
   dropoutsCount: number;
 }
 
-export function getDynamicsSummary(): DynamicsSummary {
+export function getDynamicsSummary(scope: ExtScope = 'district'): DynamicsSummary {
   const conn = db();
-  const okRuns = conn.prepare(`SELECT COUNT(*) AS n FROM ext_runs WHERE status = 'ok'`).get() as { n: number };
-  const start = latestRunStarted();
-  const latest = conn.prepare(`SELECT MAX(id) AS id FROM ext_runs WHERE status = 'ok'`).get() as { id?: number };
-  if (!start || okRuns.n < 2) {
-    return { hasMultipleRuns: false, latestRunId: latest?.id ?? null, newcomersCount: 0, dropoutsCount: 0 };
+  const okRuns = okRunsCount(scope);
+  const start = latestRunStarted(scope);
+  const latest = resolveRunId(scope);
+  if (!start || okRuns < 2) {
+    return { hasMultipleRuns: false, latestRunId: latest ?? null, newcomersCount: 0, dropoutsCount: 0 };
   }
   const newc = conn.prepare(`SELECT COUNT(*) AS n FROM ext_orgs WHERE first_seen_at >= ?`).get(start) as { n: number };
   const drop = conn.prepare(`SELECT COUNT(*) AS n FROM ext_orgs WHERE last_seen_at < ?`).get(start) as { n: number };
   return {
     hasMultipleRuns: true,
-    latestRunId: latest?.id ?? null,
+    latestRunId: latest ?? null,
     newcomersCount: newc.n,
     dropoutsCount: drop.n,
   };
