@@ -16,8 +16,9 @@ export function printReport(opts: {
   columns: PrintColumn[];
   rows: PrintCell[][];
   footnote?: string;
+  orientation?: 'portrait' | 'landscape';
 }) {
-  const { title, meta = [], chartDataUrl, columns, rows, footnote } = opts;
+  const { title, meta = [], chartDataUrl, columns, rows, footnote, orientation = 'portrait' } = opts;
 
   const cell = (c: PrintCell, align?: string) => {
     const v = typeof c === 'string' ? { text: c } : c;
@@ -33,7 +34,7 @@ export function printReport(opts: {
   const now = new Date().toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
 
   const css = `
-    @page { size: A4 landscape; margin: 10mm; }
+    @page { size: A4 ${orientation}; margin: 10mm; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     html,body { margin:0; padding:0; }
     body { font-family: 'Inter','Segoe UI',Arial,sans-serif; color:#111; padding:4px 2px; }

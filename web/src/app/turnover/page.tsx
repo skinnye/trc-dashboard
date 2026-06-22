@@ -191,7 +191,7 @@ export default function TurnoverPage() {
           : `Год ${cur?.year ?? ''}`,
         `${filteredTenants.length} арендаторов`,
       ],
-      columns: cols, rows,
+      columns: cols, rows, orientation: 'landscape',
     });
   }
 
