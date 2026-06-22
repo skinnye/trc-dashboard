@@ -127,16 +127,17 @@ export default function MapPage() {
     const moved = drag.current?.moved;
     drag.current = null;
     if (moved) return;                               // это был сдвиг, не клик
-    if (mode === 'edit' && svgRef.current) {
-      // клик без перетаскивания в режиме разметки → добавить вершину
-      const svg = svgRef.current;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX; pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      if (ctm) {
-        const p = pt.matrixTransform(ctm.inverse());
-        setDraft(d => [...d, [Math.round(p.x), Math.round(p.y)]]);
-      }
+    if (mode === 'edit' && wrapRef.current && data) {
+      // Клик в режиме разметки → координата плана. Считаем сами (а не через
+      // getScreenCTM, который врёт при CSS-transform зума/сдвига):
+      //   экран → база (убираем translate/scale) → координаты viewBox.
+      const rect = wrapRef.current.getBoundingClientRect();
+      const [, , vbW, vbH] = data.viewBox.split(/\s+/).map(Number);
+      const bx = (e.clientX - rect.left - pan.x) / scale;
+      const by = (e.clientY - rect.top - pan.y) / scale;
+      const vx = (bx / rect.width) * (vbW || 29700);
+      const vy = (by / rect.height) * (vbH || 21000);
+      setDraft(d => [...d, [Math.round(vx), Math.round(vy)]]);
     } else if (mode === 'view') {
       // клик по зоне → карточка арендатора
       const el = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
