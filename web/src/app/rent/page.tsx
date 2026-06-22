@@ -8,8 +8,9 @@ import { ChartWrap } from '@/components/Chart';
 import { fmtRub, fmtPct, fmtShort, MONTH_NAMES_FULL, cn } from '@/lib/utils';
 import {
   AlertTriangle, TrendingDown, TrendingUp, RefreshCw, ChevronDown,
-  BarChart3, Receipt, Trophy, Users, MessageSquare, Check,
+  BarChart3, Receipt, Trophy, Users, MessageSquare, Check, Printer,
 } from 'lucide-react';
+import { printReport } from '@/lib/print';
 
 type MonthSummary = {
   month: number; monthName: string; hasFact: boolean;
@@ -845,6 +846,27 @@ function LostTab({ month, setMonth, summary }: { month: number; setMonth: (m: nu
     fetch(`/api/rent/lost-revenue?month=${month}`).then(r => r.json()).then(setLost).catch(() => {});
   }, [month]);
 
+  function printLost() {
+    if (!lost || !lost.items.length) return;
+    printReport({
+      title: `Недополученная выгода · ${MONTH_NAMES_FULL[month - 1]} 2026`,
+      meta: [
+        'Помещения «Не сдан», которые сдавались в декабре 2025',
+        `Итого за месяц: ${fmtRub(lost.total)} · ${lost.items.length} помещений`,
+      ],
+      columns: [
+        { label: 'Этаж', align: 'left' }, { label: 'Помещение', align: 'left' },
+        { label: 'Пл., м²', align: 'right' }, { label: 'Последний арендатор (дек. 25)', align: 'left' },
+        { label: 'Потенциал, ₽/мес', align: 'right' },
+      ],
+      rows: lost.items.map((it: any) => [
+        it.floor ?? '—', it.room ?? '—', it.area ? it.area.toFixed(1) : '—',
+        it.lastTrade || it.lastLegal || '—',
+        { text: fmtRub(it.potentialRevenue), color: '#b91c1c' },
+      ]),
+    });
+  }
+
   return (
     <>
       <Card>
@@ -855,9 +877,17 @@ function LostTab({ month, setMonth, summary }: { month: number; setMonth: (m: nu
           title="Недополученная выгода"
           subtitle={`Помещения «Не сдан» в ${MONTH_NAMES_FULL[month - 1]} 2026, которые сдавались в декабре 2025`}
           right={
-            <div className="text-right">
-              <div className="text-xs text-muted">Итого за месяц</div>
-              <div className="text-xl font-bold text-bad num">{fmtRub(lost?.total ?? null)}</div>
+            <div className="flex items-center gap-3">
+              {lost && lost.items.length > 0 && (
+                <button onClick={printLost}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-surface2 border border-border text-text hover:border-accent/40">
+                  <Printer size={14} /> Печать
+                </button>
+              )}
+              <div className="text-right">
+                <div className="text-xs text-muted">Итого за месяц</div>
+                <div className="text-xl font-bold text-bad num">{fmtRub(lost?.total ?? null)}</div>
+              </div>
             </div>
           }
         />
@@ -909,6 +939,32 @@ function HistoryTab({ month, setMonth, summary }: { month: number; setMonth: (m:
     fetch(`/api/rent/history?month=${month}`).then(r => r.json()).then(setHist).catch(() => {});
   }, [month]);
 
+  function printHistory() {
+    if (!hist) return;
+    const rows = hist.items.map((r: any) => {
+      const debt = r.planVat - r.factOplat;
+      return [
+        r.trade || r.legal || '—', r.room ?? '—',
+        fmtRub(r.planVat), fmtRub(r.factOplat),
+        { text: fmtPct(r.pct, 0), color: r.pct >= 100 ? '#15803d' : r.pct >= 50 ? '#a16207' : '#b91c1c' },
+        debt > 0 ? { text: fmtRub(debt), color: '#b91c1c' } : '—',
+      ];
+    });
+    printReport({
+      title: `История платежей · ${MONTH_NAMES_FULL[month - 1]} 2026`,
+      meta: [
+        `Итого оплачено: ${fmtRub(hist.totalFact)} из ${fmtRub(hist.totalPlan)} (${fmtPct(hist.totalPct, 1)})`,
+        `${hist.items.length} арендаторов · статус «Сдан», план > 0`,
+      ],
+      columns: [
+        { label: 'Арендатор', align: 'left' }, { label: 'Помещение', align: 'left' },
+        { label: 'План', align: 'right' }, { label: 'Оплачено', align: 'right' },
+        { label: '%', align: 'right' }, { label: 'Долг', align: 'right' },
+      ],
+      rows,
+    });
+  }
+
   return (
     <>
       <Card>
@@ -931,6 +987,12 @@ function HistoryTab({ month, setMonth, summary }: { month: number; setMonth: (m:
         <CardHeader
           title={`История платежей · ${MONTH_NAMES_FULL[month - 1]}`}
           subtitle="По Юр.Лицам (статус «Сдан» с планом > 0)"
+          right={hist && hist.items.length > 0 && (
+            <button onClick={printHistory}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-surface2 border border-border text-text hover:border-accent/40">
+              <Printer size={14} /> Печать
+            </button>
+          )}
         />
         {!hist ? (
           <div className="text-sm text-muted py-6 text-center">Загрузка…</div>

@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { LiveBadge } from '@/components/LiveBadge';
 import { Card, CardHeader, Stat } from '@/components/Card';
 import { ChartWrap } from '@/components/Chart';
 import { fmtInt, fmtRub, fmtShort, fmtPct, cn } from '@/lib/utils';
-import { Calendar, Trophy, Ruler, Search, TrendingUp, TrendingDown, CalendarDays, X, Store, Layers, CalendarRange, RefreshCw } from 'lucide-react';
+import { printReport, type PrintCell } from '@/lib/print';
+import { Calendar, Trophy, Ruler, Search, TrendingUp, TrendingDown, CalendarDays, X, Store, Layers, CalendarRange, RefreshCw, Printer } from 'lucide-react';
 
 const MONTH_NAMES_SHORT = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
 
@@ -157,6 +158,43 @@ export default function TurnoverPage() {
     }
   }
 
+  function printTop() {
+    if (!data) return;
+    const cols = [
+      { label: '#', align: 'right' as const }, { label: 'Магазин', align: 'left' as const },
+      { label: 'Категория', align: 'left' as const }, { label: 'м²', align: 'right' as const },
+      { label: `ТО${period ? ' ' + period.label : ''}`, align: 'right' as const },
+      { label: 'ТО/мес', align: 'right' as const }, { label: 'vs пред. год', align: 'right' as const },
+      { label: 'Ср. чек', align: 'right' as const }, { label: 'Чеков', align: 'right' as const },
+      { label: 'АП с ТО', align: 'right' as const },
+    ];
+    const rows: PrintCell[][] = filteredTenants.map((t, i) => {
+      const yoy = periodYoY(t);
+      const perMonth = t.toPeriodCur != null && t.curMonths > 0 ? t.toPeriodCur / t.curMonths : null;
+      return [
+        String(i + 1), t.storeName, t.category ?? '—',
+        t.areaM2 != null ? t.areaM2.toFixed(1) : '—',
+        t.toPeriodCur != null ? fmtShort(t.toPeriodCur) + ' ₽' : '—',
+        perMonth != null ? fmtShort(perMonth) : '—',
+        yoy == null ? { text: 'новый', color: '#777' }
+          : { text: (yoy > 0 ? '+' : '') + fmtPct(yoy * 100, 1), color: yoy > 0 ? '#15803d' : yoy < 0 ? '#b91c1c' : '#555' },
+        t.focusAvgCheck != null ? fmtInt(t.focusAvgCheck) + ' ₽' : '—',
+        t.focusReceipts != null ? fmtInt(t.focusReceipts) : '—',
+        t.apWithTo != null ? fmtShort(t.apWithTo) : '—',
+      ];
+    });
+    printReport({
+      title: `Рейтинг арендаторов по ТО · ${cur?.year ?? ''}`,
+      meta: [
+        period && !period.full
+          ? `Период ${period.label} ${cur?.year} · сравнение с ${period.label} ${(cur?.year ?? 0) - 1}`
+          : `Год ${cur?.year ?? ''}`,
+        `${filteredTenants.length} арендаторов`,
+      ],
+      columns: cols, rows,
+    });
+  }
+
   const cur = useMemo(() => yearly.find(y => y.year === year) ?? null, [yearly, year]);
 
   const filteredTenants = useMemo(() => {
@@ -282,12 +320,18 @@ export default function TurnoverPage() {
                   : `Сравнение с тем же периодом прошлого года (считается из помесячных данных, а не из Excel).`
               }
               right={
-                <div className="relative">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-                  <input type="search" value={filter}
-                    onChange={e => setFilter(e.target.value)}
-                    placeholder="Магазин / юр.лицо / категория"
-                    className="bg-surface2 border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:border-accent outline-none w-72" />
+                <div className="flex items-center gap-2">
+                  <button onClick={printTop}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-surface2 border border-border text-text hover:border-accent/40">
+                    <Printer size={14} /> Печать
+                  </button>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                    <input type="search" value={filter}
+                      onChange={e => setFilter(e.target.value)}
+                      placeholder="Магазин / юр.лицо / категория"
+                      className="bg-surface2 border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:border-accent outline-none w-72" />
+                  </div>
                 </div>
               }
             />
@@ -859,6 +903,53 @@ function StoreDrillModal({
     { key: 'ap', label: 'АП', align: 'right' },
   ];
 
+  const modalRef = useRef<HTMLDivElement>(null);
+  function handlePrint() {
+    const canvas = modalRef.current?.querySelector('canvas') as HTMLCanvasElement | null;
+    const chartDataUrl = canvas ? canvas.toDataURL('image/png') : undefined;
+    // только месяцы с данными, по возрастанию периода — чтобы влезло на лист
+    const printRows = rows
+      .filter(r => (r.toSum != null && r.toSum > 0) || (r.receipts != null && r.receipts > 0))
+      .sort((a, b) => a.period - b.period);
+    const pctCell = (v: number | null): PrintCell => v == null ? '—'
+      : { text: (v > 0 ? '+' : '') + fmtPct(v * 100, 1), color: v > 0 ? '#15803d' : v < 0 ? '#b91c1c' : '#555' };
+    const printColumns = [
+      { label: 'Период', align: 'left' as const },
+      { label: 'ТО', align: 'right' as const },
+      { label: 'ТО/м²', align: 'right' as const },
+      { label: 'YoY %', align: 'right' as const },
+      { label: 'MoM %', align: 'right' as const },
+      { label: 'Покупок', align: 'right' as const },
+      ...(hasFocus ? [{ label: 'Ср. чек', align: 'right' as const }, { label: 'Чеков', align: 'right' as const }] : []),
+      { label: 'АП', align: 'right' as const },
+    ];
+    const printData: PrintCell[][] = printRows.map(r => [
+      `${MONTH_NAMES_SHORT[r.month - 1]} ${r.year}`,
+      r.toSum != null ? fmtShort(r.toSum) + ' ₽' : '—',
+      r.toPerM2 != null ? fmtShort(r.toPerM2) : '—',
+      pctCell(r.yoy),
+      pctCell(r.mom),
+      r.purchases != null ? fmtInt(r.purchases) : '—',
+      ...(hasFocus ? [
+        r.avgCheck != null ? fmtInt(r.avgCheck) + ' ₽' : '—',
+        r.receipts != null ? fmtInt(r.receipts) : '—',
+      ] : []),
+      r.ap != null ? fmtShort(r.ap) : '—',
+    ]);
+    printReport({
+      title: store,
+      meta: [
+        `Помесячная история · ${printData.length} мес. с данными`,
+        lastFocus
+          ? `Focus: средний чек ${lastFocus.avgCheck != null ? fmtInt(lastFocus.avgCheck) + ' ₽' : '—'}, чеков/мес ${lastFocus.receipts != null ? fmtInt(lastFocus.receipts) : '—'}`
+          : '',
+      ].filter(Boolean),
+      chartDataUrl,
+      columns: printColumns,
+      rows: printData,
+    });
+  }
+
   const chart = useMemo(() => {
     if (!data || data.length < 2) return null;
     const labels = data.map(p => `${MONTH_NAMES_SHORT[p.month - 1]} ${String(p.year).slice(2)}`);
@@ -891,9 +982,10 @@ function StoreDrillModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
          onClick={onClose}>
-      <div className="bg-surface border border-border rounded-xl max-w-5xl w-full max-h-[90vh] overflow-y-auto"
+      <div ref={modalRef}
+           className="bg-surface border border-border rounded-xl max-w-5xl w-full max-h-[90vh] overflow-y-auto"
            onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b border-border flex items-start justify-between">
+        <div className="p-5 border-b border-border flex items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-bold">{store}</h2>
             <p className="text-xs text-muted mt-1">
@@ -906,9 +998,15 @@ function StoreDrillModal({
               )}
             </p>
           </div>
-          <button onClick={onClose} className="text-muted hover:text-text p-1">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-surface2 border border-border text-text hover:border-accent/40">
+              <Printer size={14} /> Печать
+            </button>
+            <button onClick={onClose} className="text-muted hover:text-text p-1.5">
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <div className="p-5">
           {data == null ? (
