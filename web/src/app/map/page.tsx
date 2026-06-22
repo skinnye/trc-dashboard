@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { LiveBadge } from '@/components/LiveBadge';
 import { Card } from '@/components/Card';
+import { StoreDrillModal } from '@/components/StoreDrillModal';
 import { fmtShort, fmtInt, cn } from '@/lib/utils';
 import { Pencil, Eye, Trash2, Check, X, MapPinned, ZoomIn, ZoomOut, Maximize2, Flame, LayoutGrid } from 'lucide-react';
 
@@ -59,6 +60,7 @@ export default function MapPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [hover, setHover] = useState<number | null>(null);
+  const [drillStore, setDrillStore] = useState<string | null>(null);
   // редактор
   const [draft, setDraft] = useState<[number, number][]>([]);
   const [pickStore, setPickStore] = useState('');
@@ -124,7 +126,8 @@ export default function MapPage() {
   function onUp(e: React.PointerEvent) {
     const moved = drag.current?.moved;
     drag.current = null;
-    if (!moved && mode === 'edit' && svgRef.current) {
+    if (moved) return;                               // это был сдвиг, не клик
+    if (mode === 'edit' && svgRef.current) {
       // клик без перетаскивания в режиме разметки → добавить вершину
       const svg = svgRef.current;
       const pt = svg.createSVGPoint();
@@ -134,6 +137,11 @@ export default function MapPage() {
         const p = pt.matrixTransform(ctm.inverse());
         setDraft(d => [...d, [Math.round(p.x), Math.round(p.y)]]);
       }
+    } else if (mode === 'view') {
+      // клик по зоне → карточка арендатора
+      const el = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
+      const store = el?.closest('[data-store]')?.getAttribute('data-store');
+      if (store) setDrillStore(store);
     }
   }
   function resetView() { setScale(1); setPan({ x: 0, y: 0 }); }
@@ -156,7 +164,7 @@ export default function MapPage() {
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2"><MapPinned size={26} /> Метрики на карте</h1>
             <p className="text-sm text-muted mt-1">
-              Тепловая карта этажей: красный — худшие, лаймовый — лучшие. Колесо мыши — зум, перетаскивание — сдвиг.
+              Тепловая карта этажей: красный — худшие, лаймовый — лучшие. Колесо — зум, перетаскивание — сдвиг, клик по зоне — карточка арендатора.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -274,7 +282,7 @@ export default function MapPage() {
                         : v != null ? heatColor(pct[z.storeName] ?? 0, 0.6) : 'rgba(148,163,184,0.16)';
                       const [cx, cy] = centroid(z.points);
                       return (
-                        <g key={z.id}
+                        <g key={z.id} data-store={z.storeName}
                           onMouseEnter={() => setHover(z.id)} onMouseLeave={() => setHover(null)}
                           style={{ cursor: mode === 'edit' ? 'crosshair' : 'pointer' }}>
                           <polygon points={z.points.map(p => p.join(',')).join(' ')}
@@ -378,6 +386,11 @@ export default function MapPage() {
             )}
           </div>
         </div>
+
+        {/* Карточка арендатора по клику на зону */}
+        {drillStore && (
+          <StoreDrillModal store={drillStore} onClose={() => setDrillStore(null)} />
+        )}
       </main>
     </>
   );
