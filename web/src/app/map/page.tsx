@@ -200,15 +200,15 @@ export default function MapPage() {
                           strokeWidth={hover === z.id ? 28 : 12} />
                         {mode === 'view' && (
                           <text x={cx} y={cy} textAnchor="middle"
-                            fontSize={180} fill="#0b1220" fontWeight={700}
-                            style={{ paintOrder: 'stroke', stroke: 'rgba(255,255,255,0.85)', strokeWidth: 40 }}>
+                            fontSize={340} fill="#0b1220" fontWeight={800}
+                            style={{ paintOrder: 'stroke', stroke: 'rgba(255,255,255,0.9)', strokeWidth: 80 }}>
                             {z.storeName}
-                            {v != null && <tspan x={cx} dy={200} fontSize={150} fontWeight={500}>{fmtMetric(v, metric)}</tspan>}
+                            {v != null && <tspan x={cx} dy={380} fontSize={300} fontWeight={700}>{fmtMetric(v, metric)}</tspan>}
                           </text>
                         )}
                         {mode === 'edit' && (
-                          <text x={cx} y={cy} textAnchor="middle" fontSize={170} fill="#1e3a8a" fontWeight={700}
-                            style={{ paintOrder: 'stroke', stroke: '#fff', strokeWidth: 40 }}>{z.storeName}</text>
+                          <text x={cx} y={cy} textAnchor="middle" fontSize={320} fill="#1e3a8a" fontWeight={800}
+                            style={{ paintOrder: 'stroke', stroke: '#fff', strokeWidth: 80 }}>{z.storeName}</text>
                         )}
                       </g>
                     );
