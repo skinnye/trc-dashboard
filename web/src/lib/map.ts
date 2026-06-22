@@ -65,28 +65,36 @@ export const METRIC_LABELS: Record<MapMetric, { label: string; unit: string }> =
   avg_check:  { label: 'Средний чек',  unit: '₽' },
 };
 
-// Значение метрики по магазину за последний год (период YTD).
-export function getMetricByStore(metric: MapMetric): Record<string, number> {
-  const y = latestTurnoverYear();
-  if (!y) return {};
+// Доступный период данных как 'YYYY-MM' (для пикеров дат).
+export function getPeriodBounds(): { min: string; max: string } | null {
+  const r = db().prepare(`SELECT MIN(year*100+month) AS lo, MAX(year*100+month) AS hi
+                          FROM turnover_monthly WHERE to_sum IS NOT NULL`).get() as { lo: number; hi: number };
+  if (!r?.lo) return null;
+  const fmt = (n: number) => `${Math.floor(n / 100)}-${String(n % 100).padStart(2, '0')}`;
+  return { min: fmt(r.lo), max: fmt(r.hi) };
+}
+
+// Значение метрики по магазину за период [fromYM..toYM], где YM = year*100+month.
+export function getMetricByStore(metric: MapMetric, fromYM: number, toYM: number): Record<string, number> {
+  const rng = '(year*100+month) BETWEEN ? AND ?';
   let rows: { store: string; v: number }[] = [];
   if (metric === 'to') {
     rows = db().prepare(`SELECT store_name AS store, COALESCE(SUM(to_sum),0) AS v
-                         FROM turnover_monthly WHERE year = ? AND to_sum IS NOT NULL GROUP BY store_name`)
-      .all(y) as { store: string; v: number }[];
+                         FROM turnover_monthly WHERE ${rng} AND to_sum IS NOT NULL GROUP BY store_name`)
+      .all(fromYM, toYM) as { store: string; v: number }[];
   } else if (metric === 'to_per_m2') {
     rows = db().prepare(`SELECT store_name AS store, AVG(to_per_m2) AS v
-                         FROM turnover_monthly WHERE year = ? AND to_per_m2 IS NOT NULL GROUP BY store_name`)
-      .all(y) as { store: string; v: number }[];
+                         FROM turnover_monthly WHERE ${rng} AND to_per_m2 IS NOT NULL GROUP BY store_name`)
+      .all(fromYM, toYM) as { store: string; v: number }[];
   } else if (metric === 'receipts') {
     rows = db().prepare(`SELECT store_name AS store, COALESCE(SUM(receipts),0) AS v
-                         FROM focus_monthly WHERE year = ? AND store_name IS NOT NULL AND receipts IS NOT NULL GROUP BY store_name`)
-      .all(y) as { store: string; v: number }[];
+                         FROM focus_monthly WHERE ${rng} AND store_name IS NOT NULL AND receipts IS NOT NULL GROUP BY store_name`)
+      .all(fromYM, toYM) as { store: string; v: number }[];
   } else { // avg_check — взвешенный по числу чеков
     rows = db().prepare(`SELECT store_name AS store,
                            CASE WHEN SUM(receipts) > 0 THEN SUM(avg_check*receipts)/SUM(receipts) ELSE NULL END AS v
-                         FROM focus_monthly WHERE year = ? AND store_name IS NOT NULL GROUP BY store_name`)
-      .all(y) as { store: string; v: number }[];
+                         FROM focus_monthly WHERE ${rng} AND store_name IS NOT NULL GROUP BY store_name`)
+      .all(fromYM, toYM) as { store: string; v: number }[];
   }
   const out: Record<string, number> = {};
   for (const r of rows) if (r.v != null) out[r.store] = r.v;
