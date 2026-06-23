@@ -26,6 +26,24 @@ function scopeSourceSql(scope: string): string {
   return `source IN ('2gis-district','excel-import')`;
 }
 
+// Гео-фильтр охвата. 2ГИС не клиппит выдачу по карте — параметр m=центр/зум
+// лишь центрирует, а поиск возвращает весь город. Поэтому «район» отбираем
+// сами по расстоянию от ТРЦ Академический (у карточек есть координаты).
+const MALL = { lat: 56.78901, lng: 60.530548 };
+const DISTRICT_KM = 3;                              // радиус «района», км (легко менять)
+const K_LAT = 111.0;                                // км на градус широты
+const K_LNG = 111.0 * Math.cos(MALL.lat * Math.PI / 180); // км на градус долготы на этой широте
+
+// Возвращает SQL-условие гео-фильтра по координатам снапшота (alias по умолч. 's').
+// Для города/ТРЦ — пусто (без фильтра). Для района — круг радиусом DISTRICT_KM.
+function geoCond(scope: ExtScope, alias = 's'): string {
+  if (scope === 'city' || scope.startsWith('mall:')) return '';
+  const r2 = DISTRICT_KM * DISTRICT_KM;
+  return `AND ${alias}.latitude IS NOT NULL AND ${alias}.longitude IS NOT NULL
+          AND (((${alias}.latitude  - ${MALL.lat}) * ${K_LAT}) * ((${alias}.latitude  - ${MALL.lat}) * ${K_LAT})
+             + ((${alias}.longitude - ${MALL.lng}) * ${K_LNG.toFixed(4)}) * ((${alias}.longitude - ${MALL.lng}) * ${K_LNG.toFixed(4)})) <= ${r2}`;
+}
+
 // Последний успешный непустой прогон выбранного охвата.
 export function resolveRunId(scope: ExtScope = 'district'): number | null {
   const r = db()
@@ -47,9 +65,11 @@ export function listScopes(): ScopeInfo[] {
   const add = (scope: string, label: string) => {
     const id = resolveRunId(scope);
     if (!id) return;
-    const r = conn.prepare('SELECT started_at AS s, total_orgs AS o FROM ext_runs WHERE id = ?')
-      .get(id) as { s: string; o: number };
-    out.push({ scope, label, runId: id, startedAt: r.s, orgs: r.o ?? 0 });
+    const started = (conn.prepare('SELECT started_at AS s FROM ext_runs WHERE id = ?').get(id) as { s: string }).s;
+    // число с учётом гео-фильтра охвата (район — только в радиусе от ТРЦ)
+    const orgs = (conn.prepare(`SELECT COUNT(DISTINCT s.org_id) AS n FROM ext_snapshots s
+                                WHERE s.run_id = ? ${geoCond(scope)}`).get(id) as { n: number }).n;
+    out.push({ scope, label, runId: id, startedAt: started, orgs });
   };
   add('district', 'Район Академический');
   add('city', 'Весь Екатеринбург');
@@ -80,11 +100,12 @@ export function getExternalSummary(scope: ExtScope = 'district'): ExternalSummar
   // Орги и дубли — в рамках выбранного охвата (по снапшотам его прогона).
   let orgsCount = 0, dupCount = 0;
   if (runId) {
-    orgsCount = (conn.prepare('SELECT COUNT(DISTINCT org_id) AS n FROM ext_snapshots WHERE run_id = ?')
+    orgsCount = (conn.prepare(`SELECT COUNT(DISTINCT s.org_id) AS n FROM ext_snapshots s
+                               WHERE s.run_id = ? ${geoCond(scope)}`)
       .get(runId) as { n: number }).n;
     dupCount = (conn.prepare(`SELECT COUNT(DISTINCT s.org_id) AS n FROM ext_snapshots s
                               JOIN ext_orgs o ON o.id = s.org_id
-                              WHERE s.run_id = ? AND o.is_duplicate = 1`)
+                              WHERE s.run_id = ? AND o.is_duplicate = 1 ${geoCond(scope)}`)
       .get(runId) as { n: number }).n;
   }
   const last = runId
@@ -125,7 +146,7 @@ export function getCategoriesOverview(scope: ExtScope = 'district'): CategoryRow
         SUM(s.reviews_count) AS totalReviews
       FROM ext_categories c
       LEFT JOIN ext_orgs o      ON o.category_id = c.id
-      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
+      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ? ${geoCond(scope)}
       WHERE c.active = 1
       GROUP BY c.id
       ORDER BY orgsCount DESC, c.name
@@ -162,7 +183,7 @@ export function getCategory(categoryId: number, scope: ExtScope = 'district'): {
              SUM(s.reviews_count) AS totalReviews
       FROM ext_categories c
       LEFT JOIN ext_orgs o      ON o.category_id = c.id
-      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
+      LEFT JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ? ${geoCond(scope)}
       WHERE c.id = ?
       GROUP BY c.id
     `)
@@ -179,7 +200,7 @@ export function getCategory(categoryId: number, scope: ExtScope = 'district'): {
         s.website, s.phones, s.hours,
         s.longitude, s.latitude
       FROM ext_orgs o
-      JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ?
+      JOIN ext_snapshots s ON s.org_id = o.id AND s.run_id = ? ${geoCond(scope)}
       WHERE o.category_id = ?
       ORDER BY (s.reviews_count IS NULL), s.reviews_count DESC, o.name
     `)
@@ -275,7 +296,7 @@ export function getMapPoints(categoryId?: number, scope: ExtScope = 'district'):
     FROM ext_snapshots s
     JOIN ext_orgs o       ON o.id = s.org_id
     JOIN ext_categories c ON c.id = o.category_id
-    WHERE s.run_id = ? AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL
+    WHERE s.run_id = ? AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL ${geoCond(scope)}
   `;
   if (categoryId) {
     return conn
