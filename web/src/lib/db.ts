@@ -271,6 +271,16 @@ CREATE TABLE IF NOT EXISTS map_zones (
 );
 CREATE INDEX IF NOT EXISTS idx_map_zones_floor ON map_zones(floor);
 
+-- Пути/коридоры на плане этажа: ломаные линии (полилинии), по которым ходят
+-- «человечки». points — список вершин в координатах плана (viewBox).
+CREATE TABLE IF NOT EXISTS map_paths (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  floor       INTEGER NOT NULL,
+  points      TEXT NOT NULL,           -- JSON: [[x,y],...]
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_map_paths_floor ON map_paths(floor);
+
 -- ── Application settings (key-value) ──────────────────────────────────
 -- Динамические настройки приложения, которые пользователь может менять
 -- из UI без правки .env и без перезапуска. Например: путь к Excel-файлу

@@ -11,11 +11,13 @@ import { Pencil, Eye, Trash2, Check, X, MapPinned, ZoomIn, ZoomOut, Maximize2, F
 
 type Metric = 'to' | 'to_per_m2' | 'receipts' | 'avg_check';
 type Zone = { id: number; floor: number; storeName: string; points: [number, number][] };
+type Path = { id: number; floor: number; points: [number, number][] };
 type MapData = {
   floor: number; viewBox: string;
   bounds: { min: string; max: string } | null;
   period: { from: string; to: string };
   zones: Zone[];
+  paths: Path[];
   stores: { storeName: string; category: string | null }[];
   metrics: Record<Metric, Record<string, number>>;
 };
@@ -68,6 +70,7 @@ export default function MapPage() {
   // редактор
   const [draft, setDraft] = useState<[number, number][]>([]);
   const [pickStore, setPickStore] = useState('');
+  const [drawKind, setDrawKind] = useState<'zone' | 'path'>('zone');
   // зум/пан
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -196,6 +199,15 @@ export default function MapPage() {
   function resetView() { setScale(1); setPan({ x: 0, y: 0 }); }
 
   async function saveDraft() {
+    if (drawKind === 'path') {
+      if (draft.length < 2) return;                  // путь: точка А и точка Б
+      await fetch('/api/map/paths', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ floor, points: draft }),
+      });
+      setDraft([]); reload();
+      return;
+    }
     if (draft.length < 3 || !pickStore) return;
     await fetch('/api/map/zones', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -204,6 +216,7 @@ export default function MapPage() {
     setDraft([]); setPickStore(''); reload();
   }
   async function delZone(id: number) { await fetch(`/api/map/zones/${id}`, { method: 'DELETE' }); reload(); }
+  async function delPath(id: number) { await fetch(`/api/map/paths/${id}`, { method: 'DELETE' }); reload(); }
 
   return (
     <>
@@ -364,19 +377,43 @@ export default function MapPage() {
                       );
                     })}
 
+                    {/* Сохранённые пути: в разметке ярко, в просмотре бледно */}
+                    {(mode === 'edit' || isPeople) && data.paths.map(p => (
+                      <polyline key={p.id} points={p.points.map(pt => pt.join(',')).join(' ')}
+                        fill="none" stroke={mode === 'edit' ? 'rgba(34,211,238,0.85)' : 'rgba(34,211,238,0.35)'}
+                        strokeWidth={mode === 'edit' ? 36 : 26} strokeLinecap="round" strokeLinejoin="round"
+                        strokeDasharray={mode === 'edit' ? undefined : '60 80'} />
+                    ))}
+
+                    {/* Черновик: зона — заливка, путь — открытая линия с А и Б */}
                     {draft.length > 0 && (
                       <>
                         <polyline points={draft.map(p => p.join(',')).join(' ')}
-                          fill="rgba(96,165,250,0.25)" stroke="#60a5fa" strokeWidth={20} />
-                        {draft.map((p, i) => (
-                          <circle key={i} cx={p[0]} cy={p[1]} r={45} fill="#60a5fa" stroke="#fff" strokeWidth={12} />
-                        ))}
+                          fill={drawKind === 'zone' ? 'rgba(96,165,250,0.25)' : 'none'}
+                          stroke="#60a5fa" strokeWidth={drawKind === 'zone' ? 20 : 34}
+                          strokeLinecap="round" strokeLinejoin="round" />
+                        {draft.map((p, i) => {
+                          const isAB = drawKind === 'path' && (i === 0 || i === draft.length - 1);
+                          return (
+                            <g key={i}>
+                              <circle cx={p[0]} cy={p[1]} r={isAB ? 70 : 45}
+                                fill={isAB ? '#22d3ee' : '#60a5fa'} stroke="#fff" strokeWidth={12} />
+                              {isAB && (
+                                <text x={p[0]} y={p[1] - 110} textAnchor="middle" fontSize={260} fontWeight={800}
+                                  fill="#22d3ee" style={{ paintOrder: 'stroke', stroke: '#fff', strokeWidth: 50 }}>
+                                  {i === 0 ? 'А' : 'Б'}
+                                </text>
+                              )}
+                            </g>
+                          );
+                        })}
                       </>
                     )}
                   </svg>
                 </div>
                 {mode === 'view' && isPeople && people.targets.length > 0 && (
-                  <MapPeople targets={people.targets} vbW={vbW || 29700} vbH={vbH || 21000}
+                  <MapPeople targets={people.targets} paths={data.paths.map(p => p.points)}
+                    vbW={vbW || 29700} vbH={vbH || 21000}
                     pan={pan} scale={scale} count={peopleCount} />
                 )}
               </div>
@@ -387,31 +424,52 @@ export default function MapPage() {
           <div className="space-y-4">
             {mode === 'edit' ? (
               <Card>
-                <div className="font-semibold mb-2 flex items-center gap-2"><Pencil size={15} /> Разметка зон</div>
+                <div className="font-semibold mb-2 flex items-center gap-2"><Pencil size={15} /> Разметка</div>
+                {/* что рисуем */}
+                <div className="flex gap-1 p-1 bg-surface2 border border-border rounded-lg mb-3">
+                  <button onClick={() => { setDrawKind('zone'); setDraft([]); }}
+                    className={cn('flex-1 px-2.5 py-1 rounded-md text-xs font-medium',
+                      drawKind === 'zone' ? 'bg-accent/20 text-accent' : 'text-muted hover:text-text')}>
+                    Зона магазина
+                  </button>
+                  <button onClick={() => { setDrawKind('path'); setDraft([]); setPickStore(''); }}
+                    className={cn('flex-1 px-2.5 py-1 rounded-md text-xs font-medium',
+                      drawKind === 'path' ? 'bg-accent/20 text-accent' : 'text-muted hover:text-text')}>
+                    Путь (А→Б)
+                  </button>
+                </div>
                 <p className="text-xs text-muted mb-3">
-                  Кликами по плану обведите контур магазина (≥3 точки), выберите магазин и сохраните.
-                  Зум/сдвиг работают и здесь — клик без перетаскивания ставит точку.
+                  {drawKind === 'zone'
+                    ? 'Кликами обведите контур магазина (≥3 точки), выберите магазин и сохраните.'
+                    : 'Кликом поставьте точку А, затем повороты коридора, и точку Б (≥2 точек). По таким путям пойдут человечки.'}
+                  {' '}Зум/сдвиг работают; клик без перетаскивания ставит точку.
                 </p>
-                <div className="text-xs text-muted mb-1">Точек в контуре: <span className="text-text font-semibold">{draft.length}</span></div>
-                <select value={pickStore} onChange={e => setPickStore(e.target.value)}
-                  className="w-full bg-surface2 border border-border rounded-lg px-3 py-2 text-sm mb-2 focus:border-accent outline-none">
-                  <option value="">— выбрать магазин —</option>
-                  {data?.stores.map(s => (
-                    <option key={s.storeName} value={s.storeName}>{s.storeName}{s.category ? ` · ${s.category}` : ''}</option>
-                  ))}
-                </select>
+                <div className="text-xs text-muted mb-2">
+                  {drawKind === 'zone' ? 'Точек в контуре' : 'Точек в пути'}: <span className="text-text font-semibold">{draft.length}</span>
+                </div>
+                {drawKind === 'zone' && (
+                  <select value={pickStore} onChange={e => setPickStore(e.target.value)}
+                    className="w-full bg-surface2 border border-border rounded-lg px-3 py-2 text-sm mb-2 focus:border-accent outline-none">
+                    <option value="">— выбрать магазин —</option>
+                    {data?.stores.map(s => (
+                      <option key={s.storeName} value={s.storeName}>{s.storeName}{s.category ? ` · ${s.category}` : ''}</option>
+                    ))}
+                  </select>
+                )}
                 <div className="flex gap-2">
-                  <button onClick={saveDraft} disabled={draft.length < 3 || !pickStore}
+                  <button onClick={saveDraft}
+                    disabled={drawKind === 'zone' ? (draft.length < 3 || !pickStore) : draft.length < 2}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-good/20 text-good border border-good/30 disabled:opacity-50">
-                    <Check size={14} /> Сохранить зону
+                    <Check size={14} /> {drawKind === 'zone' ? 'Сохранить зону' : 'Сохранить путь'}
                   </button>
                   <button onClick={() => setDraft([])} disabled={!draft.length}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm bg-surface2 border border-border text-muted hover:text-text disabled:opacity-50">
                     <X size={14} />
                   </button>
                 </div>
-                <div className="mt-4 text-xs text-muted uppercase tracking-wider">Зоны этажа · {data?.zones.length ?? 0}</div>
-                <div className="mt-1 max-h-[320px] overflow-y-auto -mx-1">
+
+                <div className="mt-4 text-xs text-muted uppercase tracking-wider">Зоны · {data?.zones.length ?? 0}</div>
+                <div className="mt-1 max-h-[200px] overflow-y-auto -mx-1">
                   {data?.zones.map(z => (
                     <div key={z.id} className="flex items-center justify-between px-1 py-1.5 text-sm border-b border-border/40">
                       <span className="truncate">{z.storeName}</span>
@@ -419,6 +477,16 @@ export default function MapPage() {
                     </div>
                   ))}
                   {data && data.zones.length === 0 && <div className="text-xs text-muted py-3">Зон пока нет</div>}
+                </div>
+                <div className="mt-3 text-xs text-muted uppercase tracking-wider">Пути · {data?.paths.length ?? 0}</div>
+                <div className="mt-1 max-h-[160px] overflow-y-auto -mx-1">
+                  {data?.paths.map((p, i) => (
+                    <div key={p.id} className="flex items-center justify-between px-1 py-1.5 text-sm border-b border-border/40">
+                      <span className="truncate text-muted">Путь {i + 1} · {p.points.length} тчк</span>
+                      <button onClick={() => delPath(p.id)} className="text-muted hover:text-bad p-1"><Trash2 size={13} /></button>
+                    </div>
+                  ))}
+                  {data && data.paths.length === 0 && <div className="text-xs text-muted py-3">Путей пока нет</div>}
                 </div>
               </Card>
             ) : (

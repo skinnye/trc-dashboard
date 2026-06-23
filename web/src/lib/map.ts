@@ -41,6 +41,25 @@ export function deleteZone(id: number): void {
   db().prepare('DELETE FROM map_zones WHERE id = ?').run(id);
 }
 
+// ── Пути/коридоры (точка А → точка Б) ─────────────────────────────────
+export interface MapPath { id: number; floor: number; points: [number, number][]; }
+
+export function getPaths(floor: number): MapPath[] {
+  const rows = db()
+    .prepare('SELECT id, floor, points FROM map_paths WHERE floor = ? ORDER BY id')
+    .all(floor) as { id: number; floor: number; points: string }[];
+  return rows.map(r => ({ ...r, points: safeParse(r.points) }));
+}
+export function savePath(floor: number, points: [number, number][]): number {
+  const now = localIsoDateTime();
+  const r = db().prepare('INSERT INTO map_paths (floor, points, created_at) VALUES (?, ?, ?)')
+    .run(floor, JSON.stringify(points), now);
+  return Number(r.lastInsertRowid);
+}
+export function deletePath(id: number): void {
+  db().prepare('DELETE FROM map_paths WHERE id = ?').run(id);
+}
+
 // Магазины для выпадающего списка в редакторе — из последнего года ТО.
 export function getStoreList(): { storeName: string; category: string | null }[] {
   const y = latestTurnoverYear();

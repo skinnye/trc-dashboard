@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getZones, getStoreList, getMetricByStore, getPeriodBounds, latestYear } from '@/lib/map';
+import { getZones, getStoreList, getMetricByStore, getPeriodBounds, latestYear, getPaths } from '@/lib/map';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
       to: `${Math.floor(hi / 100)}-${String(hi % 100).padStart(2, '0')}`,
     },
     zones: getZones(floor),
+    paths: getPaths(floor),
     stores: getStoreList(),
     metrics: {
       to:        getMetricByStore('to', lo, hi),
