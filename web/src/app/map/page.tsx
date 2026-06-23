@@ -5,8 +5,9 @@ import { Nav } from '@/components/Nav';
 import { LiveBadge } from '@/components/LiveBadge';
 import { Card } from '@/components/Card';
 import { StoreDrillModal } from '@/components/StoreDrillModal';
+import { MapPeople, type PeopleTarget } from '@/components/MapPeople';
 import { fmtShort, fmtInt, cn } from '@/lib/utils';
-import { Pencil, Eye, Trash2, Check, X, MapPinned, ZoomIn, ZoomOut, Maximize2, Flame, LayoutGrid } from 'lucide-react';
+import { Pencil, Eye, Trash2, Check, X, MapPinned, ZoomIn, ZoomOut, Maximize2, Flame, LayoutGrid, Users } from 'lucide-react';
 
 type Metric = 'to' | 'to_per_m2' | 'receipts' | 'avg_check';
 type Zone = { id: number; floor: number; storeName: string; points: [number, number][] };
@@ -56,9 +57,12 @@ export default function MapPage() {
   const [data, setData] = useState<MapData | null>(null);
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [metric, setMetric] = useState<Metric>('to');
-  const [heat, setHeat] = useState(false);
+  const [vmode, setVmode] = useState<'zones' | 'heat' | 'people'>('zones');
+  const [traffic, setTraffic] = useState<{ floorTraffic: number; perimeterTraffic: number } | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const isHeat = vmode === 'heat';
+  const isPeople = vmode === 'people';
   const [hover, setHover] = useState<number | null>(null);
   const [drillStore, setDrillStore] = useState<string | null>(null);
   // редактор
@@ -83,6 +87,16 @@ export default function MapPage() {
   }
   useEffect(() => { setDraft([]); reload(); /* eslint-disable-next-line */ }, [floor, from, to]);
 
+  // Трафик этажа за период (MSSQL). Мягко деградирует, если БД недоступна.
+  useEffect(() => {
+    if (!from || !to) return;
+    setTraffic(null);
+    fetch(`/api/map/traffic?floor=${floor}&from=${from}&to=${to}`)
+      .then(r => r.json())
+      .then(d => setTraffic(d.ok ? { floorTraffic: d.floorTraffic, perimeterTraffic: d.perimeterTraffic } : null))
+      .catch(() => setTraffic(null));
+  }, [floor, from, to]);
+
   const metricMap = data?.metrics[metric] ?? {};
   const pct = useMemo(() => {
     const vals = Object.values(metricMap).filter(v => v != null).sort((a, b) => a - b);
@@ -101,6 +115,39 @@ export default function MapPage() {
       .filter(r => r.v != null)
       .sort((a, b) => (b.v as number) - (a.v as number));
   }, [data, metricMap]);
+
+  // Цели «человечков»: вес = число чеков; где чеков нет — оценка по ТО через
+  // коэффициент чеки/ТО магазинов этажа, у которых есть и то и другое.
+  const people = useMemo(() => {
+    if (!data) return { targets: [] as PeopleTarget[], floorReceipts: 0, estimatedShare: 0 };
+    const rec = data.metrics.receipts, to = data.metrics.to;
+    let sr = 0, st = 0;
+    for (const z of data.zones) {
+      const r = rec[z.storeName], t = to[z.storeName];
+      if (r != null && t != null && t > 0) { sr += r; st += t; }
+    }
+    const ratio = st > 0 ? sr / st : 0;
+    let floorReceipts = 0, estCount = 0, total = 0;
+    const targets: PeopleTarget[] = [];
+    for (const z of data.zones) {
+      const [cx, cy] = centroid(z.points);
+      const r = rec[z.storeName], t = to[z.storeName];
+      floorReceipts += r ?? 0;
+      const weight = r != null ? r : (t != null ? (ratio > 0 ? t * ratio : t) : 0);
+      if (weight > 0) {
+        targets.push({ vx: cx, vy: cy, weight, estimated: r == null });
+        total++; if (r == null) estCount++;
+      }
+    }
+    return { targets, floorReceipts, estimatedShare: total ? estCount / total : 0 };
+  }, [data]);
+
+  const peopleCount = traffic?.floorTraffic
+    ? clamp(Math.round(traffic.floorTraffic / 6000), 24, 90)
+    : 45;
+  const conversion = traffic?.floorTraffic && people.floorReceipts
+    ? (people.floorReceipts / traffic.floorTraffic) * 100 : null;
+  const [vbW, vbH] = (data?.viewBox ?? '0 0 29700 21000').split(/\s+/).map(Number).slice(2);
 
   // ── зум/пан ────────────────────────────────────────────────────────
   function onWheel(e: React.WheelEvent) {
@@ -213,23 +260,34 @@ export default function MapPage() {
               className="bg-surface2 border border-border rounded-lg px-2 py-1.5 focus:border-accent outline-none" />
 
             <div className="flex gap-1 p-1 bg-surface2 border border-border rounded-lg ml-2">
-              <button onClick={() => setHeat(false)}
-                className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
-                  !heat ? 'bg-accent/20 text-accent' : 'text-muted hover:text-text')}>
-                <LayoutGrid size={13} /> Зоны
-              </button>
-              <button onClick={() => setHeat(true)}
-                className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
-                  heat ? 'bg-accent/20 text-accent' : 'text-muted hover:text-text')}>
-                <Flame size={13} /> Тепло
-              </button>
+              {([
+                { id: 'zones',  label: 'Зоны',      Icon: LayoutGrid },
+                { id: 'heat',   label: 'Тепло',     Icon: Flame },
+                { id: 'people', label: 'Человечки', Icon: Users },
+              ] as const).map(({ id, label, Icon }) => (
+                <button key={id} onClick={() => setVmode(id)}
+                  className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
+                    vmode === id ? 'bg-accent/20 text-accent' : 'text-muted hover:text-text')}>
+                  <Icon size={13} /> {label}
+                </button>
+              ))}
             </div>
 
-            <div className="ml-auto inline-flex items-center gap-2 text-xs text-muted">
-              <span className="inline-block h-3 w-28 rounded"
-                style={{ background: 'linear-gradient(90deg, rgb(239,68,68), rgb(251,191,36), rgb(163,230,53))' }} />
-              <span>худший → лучший</span>
-            </div>
+            {isPeople ? (
+              <div className="ml-auto inline-flex items-center gap-3 text-xs flex-wrap">
+                <span className="text-muted">Трафик этажа: <b className="text-text num">{traffic ? fmtInt(traffic.floorTraffic) : '— (нет данных)'}</b></span>
+                <span className="text-muted">Чеков: <b className="text-text num">{fmtInt(people.floorReceipts)}</b></span>
+                {conversion != null && <span className="text-muted">Конверсия: <b className="text-good num">{conversion.toFixed(1)}%</b></span>}
+                <span className="inline-flex items-center gap-1 text-muted"><span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(96,165,250,0.95)' }} />по чекам</span>
+                <span className="inline-flex items-center gap-1 text-muted"><span className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(251,191,36,0.9)' }} />оценка</span>
+              </div>
+            ) : (
+              <div className="ml-auto inline-flex items-center gap-2 text-xs text-muted">
+                <span className="inline-block h-3 w-28 rounded"
+                  style={{ background: 'linear-gradient(90deg, rgb(239,68,68), rgb(251,191,36), rgb(163,230,53))' }} />
+                <span>худший → лучший</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -263,7 +321,7 @@ export default function MapPage() {
                     </defs>
 
                     {/* Режим ТЕПЛО — размытые пятна по центрам зон */}
-                    {mode === 'view' && heat && (
+                    {mode === 'view' && isHeat && (
                       <g filter="url(#heatblur)">
                         {data.zones.map(z => {
                           const v = metricMap[z.storeName];
@@ -277,11 +335,11 @@ export default function MapPage() {
 
                     {data.zones.map(z => {
                       const v = metricMap[z.storeName];
-                      const showFill = mode === 'edit' || !heat;
+                      // в режиме «человечки» зоны бледные (фон под фигурками)
                       const fill = mode === 'edit'
                         ? 'rgba(96,165,250,0.25)'
-                        : heat ? 'transparent'
-                        : v != null ? heatColor(pct[z.storeName] ?? 0, 0.6) : 'rgba(148,163,184,0.16)';
+                        : isHeat ? 'transparent'
+                        : v != null ? heatColor(pct[z.storeName] ?? 0, isPeople ? 0.22 : 0.6) : 'rgba(148,163,184,0.14)';
                       const [cx, cy] = centroid(z.points);
                       return (
                         <g key={z.id} data-store={z.storeName}
@@ -289,7 +347,7 @@ export default function MapPage() {
                           style={{ cursor: mode === 'edit' ? 'crosshair' : 'pointer' }}>
                           <polygon points={z.points.map(p => p.join(',')).join(' ')}
                             fill={fill}
-                            stroke={hover === z.id ? '#fff' : heat ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.5)'}
+                            stroke={hover === z.id ? '#fff' : isHeat ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.5)'}
                             strokeWidth={hover === z.id ? 28 : 12} />
                           {mode === 'view' && (
                             <text x={cx} y={cy} textAnchor="middle" fontSize={340} fill="#0b1220" fontWeight={800}
@@ -317,6 +375,10 @@ export default function MapPage() {
                     )}
                   </svg>
                 </div>
+                {mode === 'view' && isPeople && people.targets.length > 0 && (
+                  <MapPeople targets={people.targets} vbW={vbW || 29700} vbH={vbH || 21000}
+                    pan={pan} scale={scale} count={peopleCount} />
+                )}
               </div>
             )}
           </Card>
