@@ -123,10 +123,11 @@ export default function MapPage() {
     if (Math.abs(dx) + Math.abs(dy) > 5) drag.current.moved = true;
     setPan({ x: drag.current.px + dx, y: drag.current.py + dy });
   }
+  function onLeave() { drag.current = null; }        // выход мыши — отмена, без точки
   function onUp(e: React.PointerEvent) {
-    const moved = drag.current?.moved;
+    const d = drag.current;
     drag.current = null;
-    if (moved) return;                               // это был сдвиг, не клик
+    if (!d || d.moved) return;                       // точку ставим только на чистый клик по карте (был pointerdown, без сдвига)
     if (mode === 'edit' && wrapRef.current && data) {
       // Клик в режиме разметки → координата плана. Считаем сами (а не через
       // getScreenCTM, который врёт при CSS-transform зума/сдвига):
@@ -248,7 +249,7 @@ export default function MapPage() {
                 className={cn('relative w-full overflow-hidden touch-none',
                   mode === 'edit' ? 'cursor-crosshair' : drag.current ? 'cursor-grabbing' : 'cursor-grab')}
                 style={{ aspectRatio: '297 / 210' }}
-                onWheel={onWheel} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}>
+                onWheel={onWheel} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onLeave}>
                 <div className="absolute inset-0 origin-top-left"
                   style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
