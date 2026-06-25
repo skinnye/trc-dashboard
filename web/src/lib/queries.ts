@@ -245,6 +245,8 @@ export function getPaymentHistoryForMonthLegacy(date: string, month: number): Pa
 }
 
 // ── Rating (discipline) — per legal across all available months ───────
+export type MonthPayStatus = 'green' | 'yellow' | 'red' | 'orange';
+export interface MonthCell { m: number; status: MonthPayStatus; plan: number; fact: number }
 export interface RatingRow {
   legal: string;
   trade: string | null;
@@ -257,6 +259,10 @@ export interface RatingRow {
   debt: number;
   streak: number;
   missed: number[];
+  // Помесячная шкала: статус оплаты за каждый учтённый месяц.
+  // green — закрыл по плану (факт ≥ план), yellow — закрыл не по плану
+  // (0 < факт < план), red — не закрыл (факт = 0), orange — скидка (задел).
+  cells?: MonthCell[];
 }
 export function getRating(date: string): {
   months: number[]; inProgress: number[];
@@ -410,6 +416,13 @@ export function getRatingLegacy(date: string): {
     }
     const planSum = entries.reduce((s, e) => s + e.plan, 0);
     const factSum = entries.reduce((s, e) => s + e.fact, 0);
+    // помесячная шкала: статус по каждому учтённому месяцу
+    const cells: MonthCell[] = entries.map(e => ({
+      m: e.m,
+      plan: Math.round(e.plan),
+      fact: Math.round(e.fact),
+      status: (e.fact <= 0 ? 'red' : e.fact >= e.plan * 0.995 ? 'green' : 'yellow') as MonthPayStatus,
+    }));
     const row: RatingRow = {
       legal, trade, room,
       paid, total,
@@ -417,7 +430,7 @@ export function getRatingLegacy(date: string): {
       plan: Math.round(planSum),
       fact: Math.round(factSum),
       debt: Math.round(planSum - factSum),
-      streak, missed,
+      streak, missed, cells,
     };
     (paid === total ? stable : unstable).push(row);
   }

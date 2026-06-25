@@ -1156,6 +1156,9 @@ function RatingTab() {
         </Card>
       </div>
 
+      {/* Помесячная шкала дисциплины */}
+      <DisciplineStrips stable={stable} unstable={unstable} />
+
       {/* Tables */}
       <div className="grid lg:grid-cols-2 gap-6">
         <Card>
@@ -1174,6 +1177,89 @@ function RatingTab() {
         </Card>
       </div>
     </>
+  );
+}
+
+// Помесячная шкала оплаты: по каждому арендатору 12 отрезков-месяцев.
+// 🟢 закрыл по плану · 🟡 не по плану · 🔴 не закрыл · 🟠 скидка (задел).
+const PAY_COLOR: Record<string, string> = {
+  green: '#22c55e', yellow: '#eab308', red: '#ef4444', orange: '#fb923c',
+};
+function DisciplineStrips({ stable, unstable }: { stable: any[]; unstable: any[] }) {
+  const [q, setQ] = useState('');
+  const all = [...unstable, ...stable];        // сначала проблемные, потом стабильные
+  const rows = all.filter(r => {
+    if (!q.trim()) return true;
+    const s = q.toLowerCase();
+    return (r.trade ?? '').toLowerCase().includes(s) || (r.legal ?? '').toLowerCase().includes(s);
+  });
+  const legend = (
+    <div className="flex items-center gap-3 text-xs text-muted flex-wrap">
+      {([['green', 'по плану'], ['yellow', 'не по плану'], ['red', 'не закрыл'], ['orange', 'скидка (скоро)']] as const).map(([k, l]) => (
+        <span key={k} className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-sm" style={{ background: PAY_COLOR[k] }} /> {l}
+        </span>
+      ))}
+    </div>
+  );
+  return (
+    <Card>
+      <CardHeader
+        title="Платёжная дисциплина по месяцам"
+        subtitle="Каждый отрезок — месяц. Наведи на ячейку — план и факт."
+        right={
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {legend}
+            <div className="relative">
+              <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Арендатор"
+                className="bg-surface2 border border-border rounded-lg px-3 py-1.5 text-sm focus:border-accent outline-none w-44" />
+            </div>
+          </div>
+        }
+      />
+      <div className="overflow-x-auto -mx-5">
+        <div className="min-w-[680px]">
+          {/* шапка с месяцами */}
+          <div className="flex items-center px-5 py-1 text-[10px] text-muted uppercase tracking-wider border-b border-border sticky top-0 bg-surface z-10">
+            <div className="w-[240px] shrink-0">Арендатор</div>
+            <div className="flex-1 flex gap-0.5">
+              {MONTH_SHORT.map((mn, i) => <div key={i} className="flex-1 text-center">{mn}</div>)}
+            </div>
+            <div className="w-14 text-right">Платежи</div>
+          </div>
+          <div className="max-h-[640px] overflow-y-auto">
+            {rows.map((r, idx) => {
+              const cellByMonth = new Map<number, any>();
+              for (const c of (r.cells ?? [])) cellByMonth.set(c.m, c);
+              return (
+                <div key={idx} className="flex items-center px-5 py-1.5 border-b border-border/30 hover:bg-surface2/40">
+                  <div className="w-[240px] shrink-0 pr-2">
+                    <div className="text-sm font-medium truncate">{r.trade || r.legal}</div>
+                    {r.room && <div className="text-[10px] text-muted truncate">{r.room}</div>}
+                  </div>
+                  <div className="flex-1 flex gap-0.5">
+                    {Array.from({ length: 12 }, (_, i) => {
+                      const m = i + 1;
+                      const c = cellByMonth.get(m);
+                      const bg = c ? PAY_COLOR[c.status] : 'rgba(148,163,184,0.12)';
+                      const title = c
+                        ? `${MONTH_SHORT[i]}: план ${fmtShort(c.plan)} ₽, факт ${fmtShort(c.fact)} ₽`
+                        : `${MONTH_SHORT[i]}: нет данных`;
+                      return <div key={i} title={title} className="flex-1 h-6 rounded-sm" style={{ background: bg }} />;
+                    })}
+                  </div>
+                  <div className={cn('w-14 text-right text-xs num font-semibold',
+                    r.paid === r.total ? 'text-good' : r.pct < 50 ? 'text-bad' : 'text-warn')}>
+                    {r.paid}/{r.total}
+                  </div>
+                </div>
+              );
+            })}
+            {rows.length === 0 && <div className="text-sm text-muted py-6 text-center">Нет данных</div>}
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }
 
