@@ -1251,7 +1251,7 @@ function DisciplineStrips({ stable, unstable }: { stable: any[]; unstable: any[]
                 <div key={floor}>
                   {/* заголовок этажа — клик сворачивает/раскрывает */}
                   <button onClick={() => toggleFloor(floor)}
-                    className="w-full flex items-center gap-2 px-5 py-2 bg-surface2/60 border-y border-border hover:bg-surface2 sticky top-7 z-[9]">
+                    className="w-full flex items-center gap-2 px-5 py-2 bg-surface2 border-y border-border hover:bg-surface2/80">
                     <ChevronDown size={15} className={cn('text-muted transition-transform shrink-0', isCollapsed && '-rotate-90')} />
                     <span className="font-semibold text-sm">{floor === '—' ? 'Без этажа' : `Этаж ${floor}`}</span>
                     <span className="text-xs text-muted">{frows.length} аренд.</span>
