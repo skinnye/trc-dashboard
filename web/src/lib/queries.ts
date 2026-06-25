@@ -251,6 +251,7 @@ export interface RatingRow {
   legal: string;
   trade: string | null;
   room: string | null;
+  floor?: string | null;
   paid: number;
   total: number;
   pct: number;
@@ -356,6 +357,7 @@ export function getRatingLegacy(date: string): {
     SELECT month_num AS m, trade,
            GROUP_CONCAT(DISTINCT legal) AS legal,
            GROUP_CONCAT(DISTINCT room) AS room,
+           GROUP_CONCAT(DISTINCT floor) AS floor,
            SUM(COALESCE(plan_vat, 0)) AS plan
     FROM rent_daily
     WHERE snapshot_date = ?
@@ -391,21 +393,21 @@ export function getRatingLegacy(date: string): {
   const activeMonths = analysis.length ? analysis : monthsWithData;
   if (activeMonths.length === 0) return { months: [], inProgress, stable: [], unstable: [] };
 
-  type Agg = { legal: string; trade: string; room: string;
+  type Agg = { legal: string; trade: string; room: string; floor: string;
                entries: { m: number; plan: number; fact: number }[] };
   const byTrade = new Map<string, Agg>();
   for (const r of planRows) {
     if (!activeMonths.includes(r.m)) continue;
     const fact = factMap.get(`${r.m}|${normLegal(r.trade)}`) ?? 0;
-    if (!byTrade.has(r.trade)) byTrade.set(r.trade, { legal: r.legal ?? '', trade: r.trade, room: r.room, entries: [] });
+    if (!byTrade.has(r.trade)) byTrade.set(r.trade, { legal: r.legal ?? '', trade: r.trade, room: r.room, floor: r.floor ?? '', entries: [] });
     const a = byTrade.get(r.trade)!;
     a.entries.push({ m: r.m, plan: Number(r.plan) || 0, fact });
-    a.legal = r.legal ?? a.legal; a.room = r.room;
+    a.legal = r.legal ?? a.legal; a.room = r.room; a.floor = r.floor ?? a.floor;
   }
 
   const stable: RatingRow[] = [];
   const unstable: RatingRow[] = [];
-  for (const { legal, trade, room, entries } of byTrade.values()) {
+  for (const { legal, trade, room, floor, entries } of byTrade.values()) {
     entries.sort((a, b) => a.m - b.m);
     const paid  = entries.filter(e => e.fact > 0).length;
     const total = entries.length;
@@ -425,6 +427,7 @@ export function getRatingLegacy(date: string): {
     }));
     const row: RatingRow = {
       legal, trade, room,
+      floor: ((floor ?? '').split(',')[0].trim()) || null,   // первый этаж арендатора
       paid, total,
       pct: Math.round((paid / total) * 1000) / 10,
       plan: Math.round(planSum),

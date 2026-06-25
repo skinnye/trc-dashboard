@@ -1187,12 +1187,23 @@ const PAY_COLOR: Record<string, string> = {
 };
 function DisciplineStrips({ stable, unstable }: { stable: any[]; unstable: any[] }) {
   const [q, setQ] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleFloor = (f: string) =>
+    setCollapsed(s => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n; });
+
   const all = [...unstable, ...stable];        // сначала проблемные, потом стабильные
   const rows = all.filter(r => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return (r.trade ?? '').toLowerCase().includes(s) || (r.legal ?? '').toLowerCase().includes(s);
   });
+  // группировка по этажам, этажи по возрастанию (числовые, потом прочие)
+  const floorMap = new Map<string, any[]>();
+  for (const r of rows) { const f = r.floor || '—'; if (!floorMap.has(f)) floorMap.set(f, []); floorMap.get(f)!.push(r); }
+  const floorKey = (f: string) => { const n = parseInt(f, 10); return Number.isFinite(n) ? n : 900 + (f.charCodeAt(0) || 0); };
+  const floorGroups = Array.from(floorMap.entries()).sort((a, b) => floorKey(a[0]) - floorKey(b[0]));
+  const allCollapsed = floorGroups.length > 0 && floorGroups.every(([f]) => collapsed.has(f));
+  const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(floorGroups.map(([f]) => f)));
   const legend = (
     <div className="flex items-center gap-3 text-xs text-muted flex-wrap">
       {([['green', 'по плану'], ['yellow', 'не по плану'], ['red', 'не закрыл'], ['orange', 'скидка (скоро)']] as const).map(([k, l]) => (
@@ -1210,6 +1221,10 @@ function DisciplineStrips({ stable, unstable }: { stable: any[]; unstable: any[]
         right={
           <div className="flex items-center gap-3 flex-wrap justify-end">
             {legend}
+            <button onClick={toggleAll}
+              className="text-xs px-2.5 py-1.5 rounded-lg bg-surface2 border border-border text-muted hover:text-text">
+              {allCollapsed ? 'Развернуть все' : 'Свернуть все'}
+            </button>
             <div className="relative">
               <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Арендатор"
                 className="bg-surface2 border border-border rounded-lg px-3 py-1.5 text-sm focus:border-accent outline-none w-44" />
@@ -1228,30 +1243,50 @@ function DisciplineStrips({ stable, unstable }: { stable: any[]; unstable: any[]
             <div className="w-14 text-right">Платежи</div>
           </div>
           <div className="max-h-[640px] overflow-y-auto">
-            {rows.map((r, idx) => {
-              const cellByMonth = new Map<number, any>();
-              for (const c of (r.cells ?? [])) cellByMonth.set(c.m, c);
+            {floorGroups.map(([floor, frows]) => {
+              const isCollapsed = collapsed.has(floor);
+              const ok = frows.filter(r => r.paid === r.total).length;
+              const bad = frows.length - ok;
               return (
-                <div key={idx} className="flex items-center px-5 py-1.5 border-b border-border/30 hover:bg-surface2/40">
-                  <div className="w-[240px] shrink-0 pr-2">
-                    <div className="text-sm font-medium truncate">{r.trade || r.legal}</div>
-                    {r.room && <div className="text-[10px] text-muted truncate">{r.room}</div>}
-                  </div>
-                  <div className="flex-1 flex gap-0.5">
-                    {Array.from({ length: 12 }, (_, i) => {
-                      const m = i + 1;
-                      const c = cellByMonth.get(m);
-                      const bg = c ? PAY_COLOR[c.status] : 'rgba(148,163,184,0.12)';
-                      const title = c
-                        ? `${MONTH_SHORT[i]}: план ${fmtShort(c.plan)} ₽, факт ${fmtShort(c.fact)} ₽`
-                        : `${MONTH_SHORT[i]}: нет данных`;
-                      return <div key={i} title={title} className="flex-1 h-6 rounded-sm" style={{ background: bg }} />;
-                    })}
-                  </div>
-                  <div className={cn('w-14 text-right text-xs num font-semibold',
-                    r.paid === r.total ? 'text-good' : r.pct < 50 ? 'text-bad' : 'text-warn')}>
-                    {r.paid}/{r.total}
-                  </div>
+                <div key={floor}>
+                  {/* заголовок этажа — клик сворачивает/раскрывает */}
+                  <button onClick={() => toggleFloor(floor)}
+                    className="w-full flex items-center gap-2 px-5 py-2 bg-surface2/60 border-y border-border hover:bg-surface2 sticky top-7 z-[9]">
+                    <ChevronDown size={15} className={cn('text-muted transition-transform shrink-0', isCollapsed && '-rotate-90')} />
+                    <span className="font-semibold text-sm">{floor === '—' ? 'Без этажа' : `Этаж ${floor}`}</span>
+                    <span className="text-xs text-muted">{frows.length} аренд.</span>
+                    <span className="ml-auto text-xs inline-flex items-center gap-2">
+                      <span className="text-good">{ok} в норме</span>
+                      {bad > 0 && <span className="text-bad">{bad} с пропусками</span>}
+                    </span>
+                  </button>
+                  {!isCollapsed && frows.map((r, idx) => {
+                    const cellByMonth = new Map<number, any>();
+                    for (const c of (r.cells ?? [])) cellByMonth.set(c.m, c);
+                    return (
+                      <div key={idx} className="flex items-center px-5 py-1.5 border-b border-border/30 hover:bg-surface2/40">
+                        <div className="w-[240px] shrink-0 pr-2 pl-5">
+                          <div className="text-sm font-medium truncate">{r.trade || r.legal}</div>
+                          {r.room && <div className="text-[10px] text-muted truncate">{r.room}</div>}
+                        </div>
+                        <div className="flex-1 flex gap-0.5">
+                          {Array.from({ length: 12 }, (_, i) => {
+                            const m = i + 1;
+                            const c = cellByMonth.get(m);
+                            const bg = c ? PAY_COLOR[c.status] : 'rgba(148,163,184,0.12)';
+                            const title = c
+                              ? `${MONTH_SHORT[i]}: план ${fmtShort(c.plan)} ₽, факт ${fmtShort(c.fact)} ₽`
+                              : `${MONTH_SHORT[i]}: нет данных`;
+                            return <div key={i} title={title} className="flex-1 h-6 rounded-sm" style={{ background: bg }} />;
+                          })}
+                        </div>
+                        <div className={cn('w-14 text-right text-xs num font-semibold',
+                          r.paid === r.total ? 'text-good' : r.pct < 50 ? 'text-bad' : 'text-warn')}>
+                          {r.paid}/{r.total}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
